@@ -2,3 +2,4 @@ data/
 src/archive
 *.pyc
 .*
+config.ini
