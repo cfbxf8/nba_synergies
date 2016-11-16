@@ -8,7 +8,7 @@ import json
 config = ConfigParser.ConfigParser()
 config.readfp(open('config.ini'))
 
-def connect_sql(config):
+def connect_sql():
     try:
         ENGINE = config.get('database', 'engine')
         DATABASE = config.get('database', 'database')
@@ -38,16 +38,20 @@ def connect_sql(config):
 
 
 def run_seasons(seasons):
-    all_games = pd.DataFrame()
+    players = pd.DataFrame()
+    teams = pd.DataFrame()
+    # all_games = pd.DataFrame()
+    team_stats = pd.DataFrame()
+    starter_stats = pd.DataFrame()
+    player_stats = pd.DataFrame()
+
     for season in seasons:
         file_path = '../data/raw/matchups/' + season + '-' + str(int(season[-2:])+1).zfill(2)
 
-        players = pd.DataFrame()
-        teams = pd.DataFrame()
-        temp_games = pd.DataFrame()
-        team_stats = pd.DataFrame()
-        starter_stats = pd.DataFrame()
-        player_stats = pd.DataFrame()
+        # temp_games = pd.DataFrame()
+        temp_team_stats = pd.DataFrame()
+        temp_starter_stats = pd.DataFrame()
+        temp_player_stats = pd.DataFrame()
 
         for filename in os.listdir(file_path):
             with open(file_path + '/' + filename) as json_data:
@@ -56,17 +60,26 @@ def run_seasons(seasons):
                 
             players = player_lookup(players, jso)
             teams = team_lookup(teams, jso)
-            temp_games = pd.concat([temp_games, get_matchups(jso)])
-            team_stats = pd.concat([team_stats, json_normalize(jso['_boxscore']['resultSets']['TeamStats'])])
-            starter_stats = pd.concat([starter_stats, json_normalize(jso['_boxscore']['resultSets']['TeamStarterBenchStats'])])
-            player_stats = pd.concat([player_stats, json_normalize(jso['_boxscore']['resultSets']['PlayerStats'])])
-        temp_games['season'] = season
-        all_games = pd.concat([all_games, temp_games]).reset_index(drop=True)
+            # temp_games = pd.concat([temp_games, get_matchups(jso)])
+            temp_team_stats = pd.concat([temp_team_stats, json_normalize(jso['_boxscore']['resultSets']['TeamStats'])])
+            temp_starter_stats = pd.concat([temp_starter_stats, json_normalize(jso['_boxscore']['resultSets']['TeamStarterBenchStats'])])
+            temp_player_stats = pd.concat([temp_player_stats, json_normalize(jso['_boxscore']['resultSets']['PlayerStats'])])
+        
+        # temp_games['season'] = season
+        temp_team_stats['season'] = season
+        temp_starter_stats['season'] = season
+        temp_player_stats['season'] = season
+
+        # all_games = pd.concat([all_games, temp_games]).reset_index(drop=True)
+        team_stats = pd.concat([team_stats, temp_team_stats]).reset_index(drop=True)
+        starter_stats = pd.concat([starter_stats, temp_starter_stats]).reset_index(drop=True)
+        player_stats = pd.concat([player_stats, temp_player_stats]).reset_index(drop=True)
+
 
 
     players.to_sql('players_lookup', conn, if_exists='replace', index=False)
     teams.to_sql('teams_lookup', conn, if_exists='replace', index=False)
-    all_games.to_sql('matchups', conn, if_exists='replace', index=True)
+    # all_games.to_sql('matchups', conn, if_exists='replace', index=True)
     team_stats.to_sql('team_stats', conn, if_exists='replace', index=False)
     starter_stats.to_sql('starter_stats', conn, if_exists='replace', index=False)
     player_stats.to_sql('player_stats', conn, if_exists='replace', index=False)
@@ -150,9 +163,9 @@ def create_aggregated_db(conn):
 
 
 if __name__ == '__main__':
-    conn = connect_sql(config)
+    conn = connect_sql()
 
-    # seasons = [str(i) for i in range(2008, 2016)]
-    # run_seasons(seasons)
+    seasons = [str(i) for i in range(2008, 2016)]
+    run_seasons(seasons)
 
-    create_aggregated_db(conn)
+    # create_aggregated_db(conn)

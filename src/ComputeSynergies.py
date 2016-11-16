@@ -7,13 +7,13 @@ from collections import defaultdict
 import time
 import os
 from datetime import datetime
+from data_to_db import connect_sql
 
 
 def read_season(season):
 	df = pd.read_sql(sql = "SELECT t.* from sl_master t where ", con=con_sb)
 
 def create_graph(df):
-	import pdb; pdb.set_trace()
 	V = set()
 	print "Starting Create Graph"
 	for row in df.iterrows():
@@ -35,15 +35,13 @@ def create_graph(df):
 
 def learn_capabilities(G, games):
 	V = G.node.keys()
-	# com_lus = games['home_lu'].append(games['away_lu'])
-	# com_margins = games['hmargin'].append(games['amargin'])
-	com_lus = games['home_lu']
-	com_margins = games['hmargin']
 
-	M, B = create_matrices(com_margins, len(V))
+	lineups = games['home_lu']
+	margins = games['hmargin']
 
-	runs = len(com_lus)
-	# import pdb; pdb.set_trace()
+	M, B = create_matrices(margins, len(V))
+
+	runs = len(lineups)
 	for lu_num in xrange(len(games)):
 		h_lu = games['home_lu'][lu_num]
 		a_lu = games['away_lu'][lu_num]
@@ -52,7 +50,7 @@ def learn_capabilities(G, games):
 	k = (1/sc.comb(10,2))
 	M = k * M
 	C = np.linalg.lstsq(M, B)[0]
-	err = np.sqrt(C[1] / len(com_margins))
+	err = np.sqrt(C[1] / len(margins))
 
 	return V, C, err, M, B
 
@@ -180,25 +178,54 @@ def read_latest(season, folder):
 	file_path = '../data/' + folder +'/'
 	season_filter = [x for x in os.listdir(file_path) if x[0:4] == season]
 	last = max(season_filter)
-	print "date:", datetime.fromtimestamp(float(last.split('_')[1]))
+	print "date:", datetime.fromtimestamp(float(last.split('_')[1].split('.')[0]))
 	
 	if folder == 'graphs':
 		return nx.read_gml(file_path + last)
 	if folder == 'capabilities':
 		return np.load(file_path + last)
 
+def sql_matchup_df(conn, season):
+	df = pd.read_sql(sql = 
+		"SELECT * from matchups where season ='"+ season +"';"
+		, con=conn)
+
+	df['home_lu'] = df.home_lu.apply(eval)
+	df['away_lu'] = df.away_lu.apply(eval)
+	return df
+
+def capability_matrix(conn, V, C, season):
+	C_df = pd.DataFrame(V, columns=['id'])
+	C_df = pd.concat([C_df, pd.DataFrame(C, columns=['C'])], axis=1)
+	p_id = pd.read_sql(sql = 
+		"SELECT * from players_lookup",
+		 con=conn)
+	agg_db = pd.read_sql(sql = 
+	"SELECT * from agg_matchups where season ='"+ season +"';"
+	, con=conn)
+	com_df = C_df.merge(p_id, how='left', on='id')
+	com_df = com_df.merge(agg_db, how='left', left_on='id', right_on='player_id')
+	com_df.drop(['player_id', 'season'], axis=1, inplace=True)
+	com_df = com_df.sort_values('C', ascending=False)
+
+	return com_df
+
+
 if __name__ == '__main__':
 	season = '2014'
+	conn = connect_sql()
 	# games = read_season(season).reset_index()
 	# games.to_pickle('../data/games_dfs/games_' + season)
-	games = pd.read_pickle('../data/games_dfs/games_' + season)
+	# games = pd.read_pickle('../data/games_dfs/games_' + season)
+
+	games = sql_matchup_df(conn, season)
 
 	G = create_graph(games)
-	nx.write_gml(G, '../data/graphs/'+ season + '_' + str(int(time.time())))
+	# nx.write_gml(G, '../data/graphs/'+ season + '_' + str(int(time.time())))
 	# G = read_latest(season, 'graphs')
 	
 	V, C, err, M, B = learn_capabilities(G, games)
-	np.save('../data/capabilities/'+ season +'_'+ str(int(time.time())) +'.npy', C)
+	# np.save('../data/capabilities/'+ season +'_'+ str(int(time.time())) +'.npy', C)
 	# capability = read_latest(season, 'capabilities')
 
-	predictions = predict_season(G, games)
+	# predictions = predict_season(G, games)
