@@ -3,3 +3,4 @@ src/archive
 *.pyc
 .*
 config.ini
+headers.txt
