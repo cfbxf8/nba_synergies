@@ -3,18 +3,18 @@ from itertools import combinations
 import scipy.misc as sc
 import networkx as nx
 import pandas as pd
-from collections import defaultdict
 import time
 import os
 from datetime import datetime
 from data_to_db import connect_sql
+from combine_matchups import read_season, combine_matchups
 
 
 def create_graph(df):
     V = set()
     print "Starting Create Graph"
     for row in df.iterrows():
-        V |= set(row[1]['home_lu']) | set(row[1]['away_lu'])
+        V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
 
     num_verts = len(V)
     E_super = list(combinations(V, 2))
@@ -32,24 +32,24 @@ def create_graph(df):
 
 def learn_capabilities(G, games):
     V = G.node.keys()
-
-    lineups = games['home_lu']
-    margins = games['hmargin']
+    games.reset_index(drop=True, inplace=True)
+    
+    lineups = games['i_lineup']
+    margins = games['i_margin']
 
     M, B = create_matrices(margins, len(V))
 
     runs = len(lineups)
     for lu_num in xrange(len(games)):
-        h_lu = games['home_lu'][lu_num]
-        a_lu = games['away_lu'][lu_num]
+        h_lu = games['i_lineup'][lu_num]
+        a_lu = games['j_lineup'][lu_num]
         M = fill_matrix(G, M, V, h_lu, a_lu, lu_num)
         print lu_num / float(runs)
-    k = (1/sc.comb(10,2))
+    k = (1/sc.comb(10, 2))
     M = k * M
     C = np.linalg.lstsq(M, B)[0]
-    err = np.sqrt(C[1] / len(margins))
 
-    return V, C, err, M, B
+    return V, C, M, B
 
 
 def create_matrices(margins, num_players):
@@ -68,7 +68,7 @@ def fill_matrix(G, M, V, Ai, Aj, lu_num):
     combi = list(combinations(Ai, 2))
     combj = list(combinations(Aj, 2))
     combadv = list(combinations(Ai+Aj, 2))
-    
+
     for item in combi:
         combadv.remove(item)
     for item in combj:
@@ -85,14 +85,14 @@ def fill_matrix(G, M, V, Ai, Aj, lu_num):
         p_idx1 = V.index(pair_j[0])
         p_idx2 = V.index(pair_j[1])
         d = len(nx.shortest_path(G, pair_j[0], pair_j[1])) - 1
-        M[lu_num, p_idx1 ] -= 1/float(d)
+        M[lu_num, p_idx1] -= 1/float(d)
         M[lu_num, p_idx2] -= 1/float(d)
 
     for adver_pair in combadv:
         p_idx1 = V.index(adver_pair[0])
         p_idx2 = V.index(adver_pair[1])
         d = len(nx.shortest_path(G, adver_pair[0], adver_pair[1])) - 1
-        M[lu_num, p_idx1 ] += 1/float(d)
+        M[lu_num, p_idx1] += 1/float(d)
         M[lu_num, p_idx2] -= 1/float(d)
 
     return M
@@ -128,7 +128,7 @@ def synergy_two_teams(G, Ai, Aj):
     combi = list(combinations(Ai, 2))
     combj = list(combinations(Aj, 2))
     combadv = list(combinations(Ai+Aj, 2))
-    
+
     for item in combi:
         combadv.remove(item)
     for item in combj:
@@ -146,110 +146,85 @@ def synergy_two_teams(G, Ai, Aj):
         d = len(nx.shortest_path(G, adver_pair[0], adver_pair[1])) - 1
         Sadv += synergy_pair_diff(d, adver_pair[0], adver_pair[1])
 
-    S = (1/sc.comb(10,2)) * (Si - Sj + Sadv)
+    S = (1/sc.comb(10, 2)) * (Si - Sj + Sadv)
 
     return S
 
 
 def predict_season(G, games):
-    """Computes the sample mean of the log_likelihood under a covariance model
 
-
-    Parameters
-    ----------
-    emp_cov : 2D ndarray (n_features, n_features)
-        Maximum Likelihood Estimator of covariance
-
-    precision : 2D ndarray (n_features, n_features)
-        The precision matrix of the covariance model to be tested
-    
-    Returns
-    -------
-    sample mean of the log-likelihood
-    """
     predictions = []
-    scores = games.groupby('gameid')['hmargin'].sum()
+    scores = games.groupby('gameid')['i_margin'].sum()
     starters = games[games['index'] == 0]
     for i in xrange(len(starters)):
-        S = synergy_two_teams(G, starters['home_lu'].iloc[i], starters['away_lu'].iloc[i])
+        S = synergy_two_teams(
+            G, starters['i_lineup'].iloc[i], starters['j_lineup'].iloc[i])
         predictions.append(S)
-    scores = pd.concat([scores.reset_index(), pd.Series(predictions)], ignore_index=True, axis=1)
+    scores = pd.concat(
+        [scores.reset_index(), pd.Series(predictions)], ignore_index=True, axis=1)
     return scores
 
 
 def read_latest(season, folder):
-    file_path = '../data/' + folder +'/'
+    file_path = '../data/' + folder + '/'
     season_filter = [x for x in os.listdir(file_path) if x[0:4] == season]
     last = max(season_filter)
     print "date:", datetime.fromtimestamp(float(last.split('_')[1].split('.')[0]))
-    
+
     if folder == 'graphs':
         return nx.read_gml(file_path + last)
     if folder == 'capabilities':
         return np.load(file_path + last)
 
 
-def sql_matchup_df(conn, season):
-    df = pd.read_sql(sql = 
-        "SELECT * from matchups where season ='"+ season +"';"
-        , con=conn)
-
-    df['home_lu'] = df.home_lu.apply(eval)
-    df['away_lu'] = df.away_lu.apply(eval)
-    return df
-
-
-def capability_matrix(conn, V, C, season):
+def capability_matrix(con, V, C, season):
     C_df = pd.DataFrame(V, columns=['id'])
     C_df = pd.concat([C_df, pd.DataFrame(C, columns=['C'])], axis=1)
-    p_id = pd.read_sql(sql = 
-        "SELECT * from players_lookup",
-         con=conn)
-    agg_db = pd.read_sql(sql = 
-        "SELECT * from agg_matchups where season ='"+ season +"';"
-        , con=conn)
-    com_df = C_df.merge(p_id, how='left', on='id')
-    com_df = com_df.merge(agg_db, how='left', left_on='id', right_on='player_id')
-    com_df.drop(['player_id', 'season'], axis=1, inplace=True)
+    p_id = pd.read_sql(sql="SELECT * from players_lookup",
+                       con=con)
+    # agg_db = pd.read_sql(
+    #     sql="SELECT * from agg_matchups where season ='" + season + "';", con=con)
+    p_id_unique = p_id.drop_duplicates()
+    com_df = C_df.merge(p_id_unique, how='left', on='id')
+    # com_df = com_df.merge(
+    #     agg_db, how='left', left_on='id', right_on='player_id')
+    # com_df.drop(['player_id', 'season'], axis=1, inplace=True)
     com_df = com_df.sort_values('C', ascending=False)
 
     return com_df
 
 
-def combine_same_lineups(games):
-    games['test'] = games['homeid'] > games['awayid']
+def run_smaller(data, season):
+    # data = read_season(season, con)
+    matchups = combine_matchups(data)
+    matchups = matchups.drop_duplicates()
 
+    G = create_graph(matchups)
+    V, C, M, B = learn_capabilities(G, matchups)
 
-def test_right_teams():
-    db = pd.read_sql(sql="SELECT * from team_stats where season= '2014'", con=conn)
-    dbsmall = db[['TEAM_ID', 'GAME_ID', 'PTS']]
-    dbsmall['home_away'] = np.where(dbsmall.index % 2 == 0, 'away', 'home')
-    resultsdb = dbsmall.pivot(index='GAME_ID', columns= 'home_away')
-    flat_results = pd.DataFrame(resultsdb.to_records())
-    teams = pd.read_sql("SELECT * from teams_lookup", con=conn)
-    flat_results.merge(teams, how='left', left_on="(u'TEAM_ID', 'home')", right_on='id', copy=False)
+    err_comp = np.sqrt(sum(np.exp2(np.dot(M, C) - B)) / len(B))
+    print err_comp
 
 
 if __name__ == '__main__':
     season = '2014'
-    conn = connect_sql()
-    # games = read_season(season).reset_index()
-    # games.to_pickle('../data/games_dfs/games_' + season)
-    # games = pd.read_pickle('../data/games_dfs/games_' + season)
+    con = connect_sql()
 
-    matchups = sql_matchup_df(conn, season)
+    # data = read_season(season, con)
 
-    match_summed = 
+    # matchups = combine_matchups(data, transform='starters')
+    matchups = combine_matchups(data)
 
-    G = create_graph(games)
+    G = create_graph(matchups)
 
-    games_summed = 
     # nx.write_gml(G, '../data/graphs/'+ season + '_' + str(int(time.time())))
-    G = read_latest(season, 'graphs')
-    
-    V, C, err, M, B = learn_capabilities(G, games)
+    # G = read_latest(season, 'graphs')
+
+    V, C, M, B = learn_capabilities(G, matchups)
+
     # np.save('../data/capabilities/'+ season +'_'+ str(int(time.time())) +'.npy', C)
     # capability = read_latest(season, 'capabilities')
+    err_comp = np.sqrt(sum(np.exp2(np.dot(M, C) - B)) / len(B))
+    print err_comp
 
     # predictions = predict_season(G, games)
-    

@@ -3,14 +3,14 @@ import pandas as pd
 import os
 import json
 from connect_sql import connect_sql
+import numpy as np
 
 
 class NBAParser():
     """Class to parse json from list of seasons.
     """
 
-    def __init__(self, data_path='../data/raw/matchups/',
-                 season_list='ALL', update_tables='ALL'):
+    def __init__(self, season_list='ALL', data_path='../data/raw/matchups/',         update_tables='ALL'):
         self.data_path = data_path
         self.season_list = season_list
         self.update_tables = update_tables
@@ -22,11 +22,11 @@ class NBAParser():
         self.starter_stats = pd.DataFrame()
         self.player_stats = pd.DataFrame()
 
-        self.con = None
+        self._con = None
         self._temp_season_obj = None
 
     def _connect_sql(self):
-        self.con = connect_sql()
+        self._con = connect_sql()
 
     def run_seasons(self):
         """Create SQL databases from locally stored NBA stats json files.
@@ -48,7 +48,40 @@ class NBAParser():
                                            update_tables=self.update_tables)
             self._add_season_dfs_to_master_dfs()
 
-        self._to_sql()
+        # self.update_sql()
+
+    def update_sql(self):
+        self._connect_sql()
+        # Send to sql
+        if 'players' in self.update_tables:
+            self.players = self.players.drop_duplicates()
+            self.players = self.players.reset_index(drop=True)
+            self.players.to_sql('players_lookup', self._con,
+                                if_exists='replace', index=False)
+
+        if 'teams' in self.update_tables:
+            self.teams = self.teams.drop_duplicates('id', keep='last')
+            self.teams = self.teams.reset_index(drop=True)
+            self.teams.to_sql('teams_lookup', self._con,
+                              if_exists='replace', index=False)
+
+        if 'matchups' in self.update_tables:
+            self.matchups.to_sql('matchups', self._con,
+                                 if_exists='replace', index=True)
+
+        if 'team_stats' in self.update_tables:
+            self.team_stats.to_sql('team_stats', self._con,
+                                   if_exists='replace', index=False)
+
+        if 'starter_stats' in self.update_tables:
+            self.starter_stats.to_sql('starter_stats', self._con,
+                                      if_exists='replace', index=False)
+
+        if 'player_stats' in self.update_tables:
+            self.player_stats.to_sql('player_stats', self._con,
+                                     if_exists='replace', index=False)
+
+        return "Finished"
 
     def _define_season_list(self):
         if self.season_list == 'ALL':
@@ -73,22 +106,6 @@ class NBAParser():
         combined_df = pd.concat([left_df, right_df]).reset_index(drop=True)
 
         setattr(self, df_name_string, combined_df)
-
-    def _to_sql(self):
-        self._connect_sql()
-        # Send to sql
-        self.players.to_sql('players_lookup', self.con,
-                            if_exists='replace', index=False)
-        self.teams.to_sql('teams_lookup', self.con,
-                          if_exists='replace', index=False)
-        self.matchups.to_sql('matchups', self.con,
-                             if_exists='replace', index=True)
-        self.team_stats.to_sql('team_stats', self.con,
-                               if_exists='replace', index=False)
-        self.starter_stats.to_sql('starter_stats', self.con,
-                                  if_exists='replace', index=False)
-        self.player_stats.to_sql('player_stats', self.con,
-                                 if_exists='replace', index=False)
 
 
 class Season():
@@ -124,7 +141,7 @@ class Season():
     def _update_dfs(self):
         if self.update_tables == 'ALL':
             self.update_tables = ['players', 'teams', 'matchups', 'team_stats',
-                       'starter_stats', 'player_stats']
+                                  'starter_stats', 'player_stats']
 
         for i in self.update_tables:
             self._append_to_self(i)
@@ -167,7 +184,11 @@ class Game():
         self.starter_stats = None
         self.player_stats = None
 
+        self._home_df = None
+        self._con = None
+        self._is_home_correct = None
         self._get_game_data()
+
 
     def _load_json(self):
         self.season = '20' + self.gameid[3:5]
@@ -181,6 +202,7 @@ class Game():
 
     def _get_game_data(self):
         self._load_json()
+        self._get_home_away()
 
         self._get_players()
         self._get_teams()
@@ -205,37 +227,56 @@ class Game():
         if self.gameid != self.jso['game_id']:
             raise ValueError('Gameids do not match')
 
-        # need to check for these being reversed like on 10/28/15
-        homeid = self.jso['home_team']['id']
-        awayid = self.jso['away_team']['id']
-
-        home_lu, away_lu = [], []
-        hmargin, amargin = [], []
-        htime, atime = [], []
+        home_lineup, away_lineup = [], []
+        home_margin, away_margin = [], []
+        home_time, away_time = [], []
 
         for i in self.jso['matchups']:
-            home_lu.append(tuple([x['id'] for x in i['home_players'][0]]))
-            away_lu.append(tuple([x['id'] for x in i['away_players'][0]]))
+            home_lineup.append(tuple([x['id'] for x in i['home_players'][0]]))
+            away_lineup.append(tuple([x['id'] for x in i['away_players'][0]]))
 
-            hmargin.append(i['point_difference'] * -1)
-            amargin.append(i['point_difference'])
+            home_diff = self._compute_pt_diff(i)
 
-            htime.append(i['elapsed_seconds'])
-            atime.append(i['elapsed_seconds'])
+            home_margin.append(home_diff)
+            away_margin.append(home_diff * -1)
 
-        temp_df = pd.DataFrame({"home_lu": home_lu, "away_lu": away_lu,
-                                "hmargin": hmargin, "amargin": amargin,
-                                "htime": htime, "atime": atime})
+            home_time.append(i['elapsed_seconds'])
+            away_time.append(i['elapsed_seconds'])
 
-        temp_df["gameid"] = self.gameid
-        temp_df["homeid"] = homeid
-        temp_df["awayid"] = awayid
+        self._check_home_away()
 
-        self.matchups = temp_df
+        if self._is_home_correct:
+            self.matchups = pd.DataFrame({"home_lineup": home_lineup,
+                                          "away_lineup": away_lineup,
+                                          "home_margin": home_margin,
+                                          "away_margin": away_margin,
+                                          "home_time": home_time,
+                                          "away_time": away_time})
+
+            self.matchups["GAME_ID"] = self.gameid
+            self.matchups["home_id"] = int(self._home_df['home_ids'])
+            self.matchups["away_id"] = int(self._home_df['away_ids'])
+            self.matchups["was_home_correct"] = self._is_home_correct
+
+        elif self._is_home_correct is False:
+            self.matchups = pd.DataFrame({"home_lineup": away_lineup,
+                                          "away_lineup": home_lineup,
+                                          "home_margin": away_margin,
+                                          "away_margin": home_margin,
+                                          "home_time": away_time,
+                                          "away_time": home_time})
+
+            self.matchups["GAME_ID"] = self.gameid
+            self.matchups["home_id"] = int(self._home_df['home_ids'])
+            self.matchups["away_id"] = int(self._home_df['away_ids'])
+            self.matchups["was_home_correct"] = self._is_home_correct
 
     def _get_team_stats(self):
         self.team_stats = json_normalize(
             self.jso['_boxscore']['resultSets']['TeamStats'])
+
+        mask = self.team_stats['TEAM_ID'] == int(self._home_df['home_ids'])
+        self.team_stats['home_away'] = np.where(mask, 'home', 'away')
 
     def _get_starter_stats(self):
         self.starter_stats = json_normalize(
@@ -245,6 +286,27 @@ class Game():
         self.player_stats = json_normalize(
             self.jso['_boxscore']['resultSets']['PlayerStats'])
 
+    def _get_home_away(self):
+        self._connect_sql()
+
+        self._home_df = pd.read_sql(sql="SELECT * from home_away where home_away.game_ids = %(game)s", params={"game": self.gameid}, con=self._con)
+
+    def _check_home_away(self):
+        self._get_home_away()
+        matchup_home_id = self.jso['home_team']['id']
+        real_home_id = int(self._home_df['home_ids'])
+
+        self._is_home_correct = matchup_home_id == real_home_id
+
+    def _connect_sql(self):
+        self._con = connect_sql()
+
+    def _compute_pt_diff(self, one_matchup):
+        home_pts = one_matchup['home_end_score'] - one_matchup['home_start_score']
+        away_pts = one_matchup['away_end_score'] - one_matchup['away_start_score']
+
+        home_diff = home_pts - away_pts
+        return home_diff
 
 if __name__ == '__main__':
     parser = NBAParser()
