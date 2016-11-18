@@ -1,6 +1,7 @@
 import pandas as pd
 import sqlalchemy
 import ConfigParser
+import time
 
 
 def connect_sql():
@@ -52,7 +53,7 @@ def read_all(table):
         df['home_lineup'] = df.home_lineup.apply(eval)
         df['away_lineup'] = df.away_lineup.apply(eval)
     if table == 'matchups_reordered':
-        df['i_lineup'] = df.j_lineup.apply(eval)
+        df['i_lineup'] = df.i_lineup.apply(eval)
         df['j_lineup'] = df.j_lineup.apply(eval)
 
     return df
@@ -60,12 +61,17 @@ def read_all(table):
 
 def read_season(table, season):
     con = connect_sql()
-    sql = 'SELECT * from ' + table + ' where season=' + season + ';'
+    condition = table + ".season = cast(" + season + "as text)"
+    sql = 'SELECT * from ' + table + ' where ' + condition + ";"
     df = pd.read_sql(sql=sql, con=con)
 
     if table == 'matchups':
         df['home_lineup'] = df.home_lineup.apply(eval)
         df['away_lineup'] = df.away_lineup.apply(eval)
+    if table == 'matchups_reordered':
+        df['i_lineup'] = df.i_lineup.apply(eval)
+        df['j_lineup'] = df.j_lineup.apply(eval)
+
     return df
 
 
@@ -78,4 +84,22 @@ def read_one(table, where, condition):
     if table == 'matchups':
         df['home_lineup'] = df.home_lineup.apply(eval)
         df['away_lineup'] = df.away_lineup.apply(eval)
+    if table == 'matchups_reordered':
+        df['i_lineup'] = df.i_lineup.apply(eval)
+        df['j_lineup'] = df.j_lineup.apply(eval)
+
     return df
+
+
+def timeit(method):
+
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+
+        print '%r (%r, %r) %2.2f sec' % \
+              (method.__name__, args, kw, te-ts)
+        return result
+
+    return timed

@@ -189,7 +189,6 @@ class Game():
         self._is_home_correct = None
         self._get_game_data()
 
-
     def _load_json(self):
         self.season = '20' + self.gameid[3:5]
         two_years = self.season + '-' + str(int(self.season[-2:])+1).zfill(2)
@@ -307,6 +306,7 @@ class Game():
 
         home_diff = home_pts - away_pts
         return home_diff
+
 
 if __name__ == '__main__':
     parser = NBAParser()
