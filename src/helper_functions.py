@@ -61,7 +61,7 @@ def read_all(table):
 
 def read_season(table, season):
     con = connect_sql()
-    condition = table + ".season = cast(" + season + "as text)"
+    condition = table + ".season = cast(" + season + " as text)"
     sql = 'SELECT * from ' + table + ' where ' + condition + ";"
     df = pd.read_sql(sql=sql, con=con)
 
@@ -75,11 +75,18 @@ def read_season(table, season):
     return df
 
 
-def read_one(table, where, condition):
+def read_one(table, where_column, condition):
     con = connect_sql()
-    sql = 'SELECT * from ' + table + ' where ' + where +\
-          '= ' + condition + ';'
-    df = pd.read_sql(sql=sql, con=con)
+
+    if type(condition) is str:
+        where = ' where "' + where_column + '"= '
+        conditional = "'" + condition + "';"
+        sql = 'SELECT * from ' + table + where + conditional
+        df = pd.read_sql(sql=sql, con=con)
+
+    if type(condition) is int:
+        condition = where_column + "= " + condition + ";"
+        sql = 'SELECT * from ' + table + ' where ' + condition
 
     if table == 'matchups':
         df['home_lineup'] = df.home_lineup.apply(eval)
