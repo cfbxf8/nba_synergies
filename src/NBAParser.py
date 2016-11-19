@@ -2,7 +2,7 @@ from pandas.io.json import json_normalize
 import pandas as pd
 import os
 import json
-from connect_sql import connect_sql
+from helper_functions import connect_sql
 import numpy as np
 
 
