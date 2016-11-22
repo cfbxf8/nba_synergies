@@ -34,11 +34,38 @@ def create_reordered_matchups():
     return "Finished"
 
 
-def combine_same_matchups(df):
-    df = df.groupby(['i_lineup', 'j_lineup']).sum()
-    df.reset_index(inplace=True)
+def create_aggregated_matchups(df):
+    game_ids = df['GAME_ID'].unique()
+    all_combined = pd.DataFrame()
+    for game in game_ids:
+        print game
+        game_df = df[df['GAME_ID'] == game]
+        one_combined = combine_same_matchups(game_df)
+        all_combined = pd.concat([all_combined, one_combined], axis=1)
+    return all_combined
 
-    return df
+
+def combine_same_matchups(df):
+    sumdf = df.groupby(['i_lineup', 'j_lineup']).sum()
+    sumdf = sumdf[['i_margin', 'i_time', 'j_margin', 'j_time', 'starting']]
+
+    firstdf = df.groupby(['i_lineup', 'j_lineup']).first()[['GAME_ID', 'i_id', 'j_id', 'season', 'was_home_correct']]
+
+    countdf = pd.DataFrame(df.groupby(['i_lineup', 'j_lineup']).count()['GAME_ID'])
+    countdf.columns = ['count']
+
+    new_df = pd.concat([sumdf, firstdf, countdf], axis=1)
+
+    new_df.sort_values(['GAME_ID', 'i_time'], ascending=[True, False], inplace=True)
+
+    new_df.reset_index(inplace=True)
+
+    return new_df
+
+
+def greater_than_minute(df):
+    small_df = df[df['j_time'] >= 60]
+    return small_df
 
 
 def create_aggregated_db(conn):

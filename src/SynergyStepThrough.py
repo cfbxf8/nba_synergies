@@ -26,6 +26,7 @@ class SynergyStepThrough():
         self._teamids = None
         self._team_M = None
         self._other_M = None
+        self._i_abbr = None
 
         self.create_graph()
 
@@ -51,16 +52,21 @@ class SynergyStepThrough():
     def step_through_one_game(self):
         inpt = None
         self.player_team_id_lookup()
-        for num in xrange(1, len(self._bigdf)):
+        for num in xrange(1, len(self._bigdf) + 1):
             self.df = self._bigdf.iloc[0:num]
             self.learn_capabilities()
 
             print '*************************'
             self.compute_error()
             print self.df[['GAME_ID', 'i_margin', 'i_time']]
-            self.capability_matrix()
+            if num == 1:
+                self.create_capability_matrix()
+            else:
+                self.update_capability_matrix()
+            print self._i_abbr, "total =", self.df[['i_margin']].sum()[0]
             print '========================'
-            print self.C_df
+            print self.C_df[self.C_df['C'] != 0.0].sort_values('C', ascending=False)
+            print self.C_df['C'].sum()
 
             if inpt == 'c':
                 continue
@@ -114,14 +120,14 @@ class SynergyStepThrough():
         for pair_i in combi:
             p_idx1 = self._V_index[pair_i[0]]
             p_idx2 = self._V_index[pair_i[1]]
-            d = self.short_path_len(pair_i[0], pair_i[1])
+            d = nx.shortest_path_length(self.G, pair_i[0], pair_i[1])
             self._team_M[lu_num, p_idx1] += 1/float(d)
             self._team_M[lu_num, p_idx2] += 1/float(d)
 
         for pair_j in combj:
             p_idx1 = self._V_index[pair_j[0]]
             p_idx2 = self._V_index[pair_j[1]]
-            d = self.short_path_len(pair_j[0], pair_j[1])
+            d = nx.shortest_path_length(self.G, pair_j[0], pair_j[1])
             self._team_M[lu_num, p_idx1] -= 1/float(d)
             self._team_M[lu_num, p_idx2] -= 1/float(d)
 
@@ -142,21 +148,23 @@ class SynergyStepThrough():
         self.error = np.sqrt(sum(np.exp2(pred - self.B)) / float(len(self.B)))
         print self.error
 
-    def capability_matrix(self):
+    def create_capability_matrix(self):
         self._con = connect_sql()
         C_df = pd.DataFrame(self.V, columns=['id'])
         C_df = pd.concat([C_df, pd.DataFrame(self.C, columns=['C'])], axis=1)
         p_id = pd.read_sql(sql="SELECT * from players_lookup",
                            con=self._con)
-        C_df['C'] = C_df['C'].round(1)
+
         # agg_db = pd.read_sql(
         #     sql="SELECT * from agg_matchups where season ='" + season + "';", con=con)
 
+        C_df['C'] = C_df['C'].round(1)
         C_df = C_df.merge(p_id, how='left', on='id')
         C_df = C_df.merge(self._teamids[['TEAM_ABBREVIATION', 'PLAYER_ID']],
                           left_on='id', right_on='PLAYER_ID', how='left')
         C_df.drop('PLAYER_ID', axis=1, inplace=True)
         C_df = C_df.rename(columns={'TEAM_ABBREVIATION': 'Team'})
+
         # C_df = C_df.merge(
         #     agg_db, how='left', left_on='id', right_on='player_id')
         # C_df.drop(['player_id', 'season'], axis=1, inplace=True)
@@ -168,28 +176,60 @@ class SynergyStepThrough():
 
         i_lineup = set(self.df.iloc[-1]['i_lineup'])
         j_lineup = set(self.df.iloc[-1]['j_lineup'])
-        current_lineup = i_lineup | j_lineup
-        C_df['in_game'] = np.where(C_df['id'].isin(current_lineup), "in", "")
+        cur_lineup = i_lineup | j_lineup
+        C_df['in_game'] = np.where(C_df['id'].isin(cur_lineup), "in", "")
 
         C_df['ptd'] = 0
         cur_ptd = self.df.iloc[-1]['i_margin']
-        C_df['ptd'] = np.where(C_df['id'].isin(i_lineup), C_df['ptd'] + cur_ptd, C_df['ptd'])
-        C_df['ptd'] = np.where(C_df['id'].isin(j_lineup), C_df['ptd'] + cur_ptd * -1, C_df['ptd'])
-        C_df['in_game'] = np.where(C_df['id'].isin(current_lineup), "in", C_df['ptd'])
+        C_df['ptd'] = np.where(C_df['id'].isin(i_lineup), cur_ptd, C_df['ptd'])
+        C_df['ptd'] = np.where(C_df['id'].isin(j_lineup), cur_ptd * -1, C_df['ptd'])
 
-        if len(self.df) > 1:
-            old_lineup = set(self.df.iloc[-2]['i_lineup'] + self.df.iloc[-2]['j_lineup'])
+        C_df['time'] = 0
+        cur_time = self.df.iloc[-1]['i_time']
+        C_df['time'] = np.where(C_df['id'].isin(cur_lineup), cur_time + C_df['time'], C_df['time'])
 
-            diff = list(old_lineup ^ current_lineup)
-            mask = {}
-            [mask.update({d: d in current_lineup}) for d in diff]
+        C_df['diff'] = 0
 
-            C_df['change'] = ''
-            for k, v in mask.iteritems():
-                C_df['change'] = np.where(C_df['id'] == k, v, C_df['change'])
+        self._i_abbr = self._teamids[self._teamids['TEAM_ID'] == self.df['i_id'].iloc[0]].iloc[0]['TEAM_ABBREVIATION']
 
-        self.C_df = C_df.sort_values('C', ascending=False)
-        # self.C_df = C_df
+        self.C_df = C_df
+
+    def update_capability_matrix(self):
+        self.C_df['C'] = self.C.round(1)
+        self.C_df['M'] = pd.Series(self.M[-1], name='M').round(2)
+        self.C_df['team_M'] = pd.Series(self._team_M[-1], name='team_M').round(2)
+        self.C_df['other_M'] = pd.Series(self._other_M[-1], name='other_M').round(2)
+
+        i_lineup = set(self.df.iloc[-1]['i_lineup'])
+        j_lineup = set(self.df.iloc[-1]['j_lineup'])
+        cur_lineup = i_lineup | j_lineup
+        self.C_df['in_game'] = np.where(self.C_df['id'].isin(cur_lineup), "in", "")
+
+        cur_ptd = self.df.iloc[-1]['i_margin']
+        self.C_df['ptd'] = np.where(self.C_df['id'].isin(i_lineup), self.C_df['ptd'] + cur_ptd, self.C_df['ptd'])
+        self.C_df['ptd'] = np.where(self.C_df['id'].isin(j_lineup), self.C_df['ptd'] + cur_ptd * -1, self.C_df['ptd'])
+
+        old_lineup = set(self.df.iloc[-2]['i_lineup'] + self.df.iloc[-2]['j_lineup'])
+
+        diff = list(old_lineup ^ cur_lineup)
+        mask = {}
+        [mask.update({d: d in cur_lineup}) for d in diff]
+
+        self.C_df['change'] = ''
+        for k, v in mask.iteritems():
+            self.C_df['change'] = np.where(self.C_df['id'] == k, v, self.C_df['change'])
+
+        cur_time = self.df.iloc[-1]['i_time']
+        self.C_df['time'] = np.where(self.C_df['id'].isin(cur_lineup), cur_time + self.C_df['time'], self.C_df['time'])
+
+        # self.C_df['diff'] = np.where(self.C_df['id'].isin(i_lineup), cur_ptd, 0)
 
     def player_team_id_lookup(self):
-        self._teamids = read_one('player_stats', 'GAME_ID', '0021401224')
+        game_id = str(self._bigdf.iloc[0]['GAME_ID'])
+        self._teamids = read_one('player_stats', 'GAME_ID', game_id)
+
+
+if __name__ == '__main__':
+    one = read_one('matchups_reordered', 'GAME_ID', '0021401224')
+    syn = SynergyStepThrough(one)
+    syn.step_through_one_game()
