@@ -2,6 +2,7 @@ import pandas as pd
 import sqlalchemy
 import ConfigParser
 import time
+import cPickle as pickle
 
 
 def connect_sql():
@@ -96,6 +97,24 @@ def read_one(table, where_column, condition):
         df['j_lineup'] = df.j_lineup.apply(eval)
 
     return df
+
+
+def subset_division(df, division):
+    team_ids = read_all('teams_lookup')[['id', 'division']]
+    df = df.merge(team_ids, how='left', left_on='i_id', right_on='id')
+    df = df.merge(team_ids, how='left', left_on='j_id', right_on='id', suffixes=['_i', '_j'])
+    df.drop(['id_i', 'id_j'], axis=1, inplace=True)
+
+    df = df[(df['division_i'] == division) & (df['division_j'] == division)]
+
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+
+def read_pickle(file_name):
+    with open(file_name, 'rb') as f:
+        d = pickle.load(f)
+    return d
 
 
 def timeit(method):

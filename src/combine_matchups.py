@@ -68,6 +68,14 @@ def greater_than_minute(df):
     return small_df
 
 
+def add_divisions():
+    con = connect_sql()
+    team_divisions = pd.read_csv('../data/Divisions.csv')
+    team_divisions.to_sql('teams_lookup', con,
+                          if_exists='replace', index=False)
+    return "Finished"
+
+
 def create_aggregated_db(conn):
     df = pd.read_sql(sql="SELECT * from matchups", con=conn)
     df_new = df[['amargin', 'atime', 'away_lu', 'hmargin',
