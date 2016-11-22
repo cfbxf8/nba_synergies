@@ -3,8 +3,11 @@ from itertools import combinations
 import scipy.misc as sc
 import networkx as nx
 import pandas as pd
+import random
+import time
+import cPickle as pickle
 from combine_matchups import combine_same_matchups, greater_than_minute
-from helper_functions import read_season, timeit, connect_sql
+from helper_functions import read_season, timeit, connect_sql, subset_division
 
 
 class ComputeSynergies():
@@ -21,8 +24,12 @@ class ComputeSynergies():
         self._V_index = None
         self._con = None
         self.C_df = None
+        self._small_E = None
+        self._no_edge_list = None
 
         self.create_graph()
+        self._get_V_and_index()
+        self.df.reset_index(drop=True, inplace=True)
 
     @timeit
     def create_graph(self):
@@ -37,31 +44,34 @@ class ComputeSynergies():
         num_E_super = len(E_super)
         num_E_small = np.random.binomial(num_E_super, 0.5)
         mask_E = np.random.choice(num_E_super, num_E_small, replace=False)
-        small_E = np.array(E_super)[mask_E]
+        self._small_E = np.array(E_super)[mask_E]
+        self._no_edge_list = np.array(E_super)[~mask_E]
 
         self.G = nx.Graph()
         self.G.add_nodes_from(self.V)
-        self.G.add_edges_from(small_E)
+        self.G.add_edges_from(self._small_E)
 
     @timeit
     def learn_capabilities(self):
-        self.V = self.G.node.keys()
-        self.df.reset_index(drop=True, inplace=True)
 
         self._create_matrices()
-
-        self._V_index = {}
-        for ix, player in enumerate(self.V):
-            self._V_index.update({player: ix})
 
         for lu_num in xrange(len(self.B)):
             h_lu = self.df['i_lineup'][lu_num]
             a_lu = self.df['j_lineup'][lu_num]
             self._fill_matrix(h_lu, a_lu, lu_num)
-            print lu_num / float(len(self.B))
+            # print lu_num / float(len(self.B))
         k = (1/sc.comb(10, 2))
         self.M = k * self.M
         self.C = np.linalg.lstsq(self.M, self.B)[0]
+
+        self.compute_error()
+
+    def _get_V_and_index(self):
+        self.V = self.G.node.keys()
+        self._V_index = {}
+        for ix, player in enumerate(self.V):
+            self._V_index.update({player: ix})
 
     def _create_matrices(self):
         # create M matrix
@@ -136,6 +146,60 @@ class ComputeSynergies():
         #     agg_db, how='left', left_on='id', right_on='player_id')
         # C_df.drop(['player_id', 'season'], axis=1, inplace=True)
         self.C_df = C_df.sort_values('C', ascending=False)
+
+    @timeit
+    def simulated_annealing(self, num):
+        try:
+            num_no_improvement = 0
+            while (num_no_improvement < num) & (self.error > 20):
+                # print("--- %s seconds ---" % round(time.time() - start_time, 2))
+                # start_time = time.time()
+                print num_no_improvement, self.error
+                self.old_G = self.G
+                self.old_error = self.error
+
+                rand = random.random()
+                if rand > 0.5:
+                    v1 = np.random.choice(self.V)
+                    v2 = np.random.choice(self.V)
+
+                    while self.G.has_edge(v1, v2) or v1 == v2:
+                        v1 = np.random.choice(self.G.nodes())
+                        v2 = np.random.choice(self.G.nodes())
+
+                    self.G.add_edge(v1, v2)
+
+                else:
+                    v1 = np.random.choice(self.G.nodes())
+                    v2 = np.random.choice(self.G.nodes())
+
+                    while self.G.has_edge(v1, v2) is False or v1 == v2:
+                        v1 = np.random.choice(self.G.nodes())
+                        v2 = np.random.choice(self.G.nodes())
+
+                    self.G.remove_edge(v1, v2)
+
+                self.learn_capabilities()
+
+                if self.error > self.old_error:
+                    self.G = self.old_G
+                    self.error = self.old_error
+                    num_no_improvement += 1
+
+                else:
+                    num_no_improvement = 0
+
+            return "Finished"
+
+        except:
+            self.to_pickle()
+            return "Finished with errors"
+
+    def to_pickle(self):
+        with open('synergy_class.pkl', 'w') as f:
+            pickle.dump(self,f)
+
+        return "Pickled"
 
 
 class PredictSynergy():
@@ -251,9 +315,11 @@ def predict_all(syn_obj, df, season):
 if __name__ == '__main__':
     season = '2014'
     df = read_season('matchups_reordered', season)
+    df = subset_division(df, 'Pacific')
     df = combine_same_matchups(df)
     df = greater_than_minute(df)
     cs = ComputeSynergies(df)
     cs.learn_capabilities()
+    cs.simulated_annealing(1000)
 
-    predictions = predict_all(cs, df, season)
+    # predictions = predict_all(cs, df, season)
