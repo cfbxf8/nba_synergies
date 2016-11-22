@@ -6,13 +6,15 @@ import pandas as pd
 import random
 import time
 import cPickle as pickle
+import math
 from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql, subset_division
+from PredictSynergy import PredictSynergy, predict_all
 
 
 class ComputeSynergies():
 
-    def __init__(self, df):
+    def __init__(self, df, graph_location=None):
         self.df = df
         self.V = set()
         self.C = None
@@ -20,19 +22,22 @@ class ComputeSynergies():
         self.B = None
         self.G = None
         self.error = None
+        self.graph_location = graph_location
 
         self._V_index = None
         self._con = None
         self.C_df = None
         self._small_E = None
         self._no_edge_list = None
+        self._edge_prob = 0.5
 
-        self.create_graph()
-        self._get_V_and_index()
-        self.df.reset_index(drop=True, inplace=True)
+        # self.create_graph()
+        # self._get_V_and_index()
+        # self.df.reset_index(drop=True, inplace=True)
 
     @timeit
     def create_graph(self):
+        self.V = set()
         for row in self.df.iterrows():
             self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
 
@@ -42,7 +47,7 @@ class ComputeSynergies():
 
         E_super = list(combinations(self.V, 2))
         num_E_super = len(E_super)
-        num_E_small = np.random.binomial(num_E_super, 0.5)
+        num_E_small = np.random.binomial(num_E_super, self._edge_prob)
         mask_E = np.random.choice(num_E_super, num_E_small, replace=False)
         self._small_E = np.array(E_super)[mask_E]
         self._no_edge_list = np.array(E_super)[~mask_E]
@@ -68,6 +73,7 @@ class ComputeSynergies():
         self.compute_error()
 
     def _get_V_and_index(self):
+
         self.V = self.G.node.keys()
         self._V_index = {}
         for ix, player in enumerate(self.V):
@@ -95,42 +101,31 @@ class ComputeSynergies():
         for pair_i in combi:
             p_idx1 = self._V_index[pair_i[0]]
             p_idx2 = self._V_index[pair_i[1]]
-            d = self.short_path_len(pair_i[0], pair_i[1])
+            d = nx.shortest_path_length(self.G, pair_i[0], pair_i[1])
             self.M[lu_num, p_idx1] += 1/float(d)
             self.M[lu_num, p_idx2] += 1/float(d)
 
         for pair_j in combj:
             p_idx1 = self._V_index[pair_j[0]]
             p_idx2 = self._V_index[pair_j[1]]
-            d = self.short_path_len(pair_j[0], pair_j[1])
+            d = nx.shortest_path_length(self.G, pair_j[0], pair_j[1])
             self.M[lu_num, p_idx1] -= 1/float(d)
             self.M[lu_num, p_idx2] -= 1/float(d)
 
         for adver_pair in combadv:
             p_idx1 = self._V_index[adver_pair[0]]
             p_idx2 = self._V_index[adver_pair[1]]
-            d = self.short_path_len(adver_pair[0], adver_pair[1])
+            d = nx.shortest_path_length(self.G, adver_pair[0], adver_pair[1])
             self.M[lu_num, p_idx1] += 1/float(d)
             self.M[lu_num, p_idx2] -= 1/float(d)
 
-    def short_path_len(self, node1, node2):
-        return len(nx.shortest_path(self.G, node1, node2)) - 1
+    # def short_path_len(self, node1, node2):
+    #     return len(nx.shortest_path(self.G, node1, node2)) - 1
 
     def compute_error(self):
         pred = np.dot(self.M, self.C)
-        self.error = np.sqrt(sum(np.exp2(pred - self.B)) / len(self.B))
-        print self.error
-
-    # def read_latest(season, folder):
-    #     file_path = '../data/' + folder + '/'
-    #     season_filter = [x for x in os.listdir(file_path) if x[0:4] == season]
-    #     last = max(season_filter)
-    #     print "date:", datetime.fromtimestamp(float(last.split('_')[1].split('.')[0]))
-
-    #     if folder == 'graphs':
-    #         return nx.read_gml(file_path + last)
-    #     if folder == 'capabilities':
-    #         return np.load(file_path + last)
+        self.error = math.sqrt(sum((pred - self.B) ** 2) / len(self.B))
+        # print self.error
 
     def capability_matrix(self):
         self._con = connect_sql()
@@ -148,10 +143,10 @@ class ComputeSynergies():
         self.C_df = C_df.sort_values('C', ascending=False)
 
     @timeit
-    def simulated_annealing(self, num):
+    def simulated_annealing(self, num=1000):
         try:
             num_no_improvement = 0
-            while (num_no_improvement < num) & (self.error > 20):
+            while (num_no_improvement < num) & (self.error > 1):
                 # print("--- %s seconds ---" % round(time.time() - start_time, 2))
                 # start_time = time.time()
                 print num_no_improvement, self.error
@@ -191,125 +186,44 @@ class ComputeSynergies():
 
             return "Finished"
 
-        except:
+        except Exception, e:
             self.to_pickle()
+            print e
             return "Finished with errors"
 
     def to_pickle(self):
-        with open('synergy_class.pkl', 'w') as f:
-            pickle.dump(self,f)
+        round_err = str(self.error.round()[0])
+        name = '../data/cs/synergy_class_Pacific_'+ round_err +'.pkl'
+        with open(name, 'w') as f:
+            pickle.dump(self, f)
 
         return "Pickled"
 
+    def create_many_random_graphs(self, num=10):
+        incumbent_error = 10000
+        for _ in xrange(num):
+            self._edge_prob = random.uniform(0.3, 0.9)
+            self.create_graph()
+            self._get_V_and_index()
+            self.df.reset_index(drop=True, inplace=True)
 
-class PredictSynergy():
+            self.learn_capabilities()
 
-    def __init__(self, syn_obj, df):
-        self.syn_obj = syn_obj
-        self.orig_df = df
-        self.df = df
-        self.V = set()
-        self.C = None
-        self.M = None
-        self.pred_scores = None
-        self.predictdf = None
+            print "New:", _, self._edge_prob, self.error
 
-        self._V_index = None
-        self._con = None
-        self._game_id = self.df['GAME_ID'].iloc[0]
+            # import pdb; pdb.set_trace()
+            if incumbent_error > self.error:
+                incumbent_graph = self.G
+                incumbent_error = self.error
+                incumbent_edge_prob = self._edge_prob
+            else:
+                self.G = incumbent_graph
+                self.error = incumbent_error
+                self._edge_prob = incumbent_edge_prob
 
-    def predict_all(self):
-        game_ids = self.orig_df['GAME_ID'].unique()
-        for game in game_ids:
-            self._game_id = game
-            self.df = self.orig_df[self.orig_df['GAME_ID'] == game]
-            self.predict_one()
-            self.append_prediction()
+            print "Old:", _, self._edge_prob, self.error
 
-    def predict_one(self):
-        for row in self.df.iterrows():
-            self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
-        self.V = list(self.V)
-
-        self._V_index = {}
-        for ix, player in enumerate(self.V):
-            self._V_index.update({player: ix})
-
-        index_of_big_C = [self.syn_obj._V_index[player] for player in self.V]
-
-        self.C = self.syn_obj.C[index_of_big_C]
-        self.M = np.zeros((len(self.df), len(self.V)))
-
-        for lu_num in xrange(len(self.df)):
-            h_lu = self.df['i_lineup'][lu_num]
-            a_lu = self.df['j_lineup'][lu_num]
-            self._fill_matrix(h_lu, a_lu, lu_num)
-
-        k = (1/sc.comb(10, 2))
-        self.M = k * self.M
-
-        self.pred_scores = np.dot(self.M, self.C)
-        self.predictdf = pd.DataFrame([[self._game_id, self.pred_scores.sum()]])
-
-    def score_prediction(self):
-        print self.orig_df['i_margin'].sum() * self.pred_scores.sum() > 0
-
-    def _fill_matrix(self, Ai, Aj, lu_num):
-
-        combi = list(combinations(Ai, 2))
-        combj = list(combinations(Aj, 2))
-        combadv = list(combinations(Ai+Aj, 2))
-
-        for item in combi:
-            combadv.remove(item)
-        for item in combj:
-            combadv.remove(item)
-
-        for pair_i in combi:
-            p_idx1 = self._V_index[pair_i[0]]
-            p_idx2 = self._V_index[pair_i[1]]
-            d = self.short_path_len(pair_i[0], pair_i[1])
-            self.M[lu_num, p_idx1] += 1/float(d)
-            self.M[lu_num, p_idx2] += 1/float(d)
-
-        for pair_j in combj:
-            p_idx1 = self._V_index[pair_j[0]]
-            p_idx2 = self._V_index[pair_j[1]]
-            d = self.short_path_len(pair_j[0], pair_j[1])
-            self.M[lu_num, p_idx1] -= 1/float(d)
-            self.M[lu_num, p_idx2] -= 1/float(d)
-
-        for adver_pair in combadv:
-            p_idx1 = self._V_index[adver_pair[0]]
-            p_idx2 = self._V_index[adver_pair[1]]
-            d = self.short_path_len(adver_pair[0], adver_pair[1])
-            self.M[lu_num, p_idx1] += 1/float(d)
-            self.M[lu_num, p_idx2] -= 1/float(d)
-
-    def short_path_len(self, node1, node2):
-        return len(nx.shortest_path(self.syn_obj.G, node1, node2)) - 1
-
-
-def predict_all(syn_obj, df, season):
-    predict_df = pd.DataFrame()
-    game_ids = df['GAME_ID'].unique()
-    for game in game_ids:
-        print game
-        gamedf = df[df['GAME_ID'] == game].reset_index()
-        ps = PredictSynergy(syn_obj, gamedf)
-        ps.predict_one()
-        predict_df = predict_df.append(ps.predictdf)
-
-    predict_df.columns = ['GAME_ID', 'prediction']
-    predict_df.set_index('GAME_ID', inplace=True)
-
-    actual = read_season('matchups_reordered', season)
-    actual = actual.groupby('GAME_ID').sum()['i_margin']
-
-    com_df = pd.concat([actual, predict_df], axis=1)
-    com_df['correct'] = com_df['i_margin'] * com_df['prediction'] > 0
-
-    return com_df
+        self.learn_capabilities()
 
 
 if __name__ == '__main__':
@@ -319,7 +233,8 @@ if __name__ == '__main__':
     df = combine_same_matchups(df)
     df = greater_than_minute(df)
     cs = ComputeSynergies(df)
-    cs.learn_capabilities()
-    cs.simulated_annealing(1000)
+    cs.create_many_random_graphs(100)
+    # cs.learn_capabilities()
+    # cs.simulated_annealing(1000)
 
     # predictions = predict_all(cs, df, season)
