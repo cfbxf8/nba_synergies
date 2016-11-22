@@ -3,6 +3,7 @@ from itertools import combinations
 import scipy.misc as sc
 import networkx as nx
 import pandas as pd
+import math
 from combine_matchups import combine_same_matchups
 from helper_functions import read_season, timeit, connect_sql, read_one
 pd.set_option('display.width', 200)
@@ -145,8 +146,8 @@ class SynergyStepThrough():
 
     def compute_error(self):
         pred = np.dot(self.M, self.C)
-        self.error = np.sqrt(sum(np.exp2(pred - self.B)) / float(len(self.B)))
-        print self.error
+        self.error = math.sqrt(sum((pred - self.B) ** 2) / len(self.B))
+        print "Error:", self.error
 
     def create_capability_matrix(self):
         self._con = connect_sql()
