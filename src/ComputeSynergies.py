@@ -3,7 +3,7 @@ from itertools import combinations
 import scipy.misc as sc
 import networkx as nx
 import pandas as pd
-from combine_matchups import combine_same_matchups
+from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql
 
 
@@ -138,9 +138,59 @@ class ComputeSynergies():
         self.C_df = C_df.sort_values('C', ascending=False)
 
 
+class PredictSynergy():
 
+    def __init__(self, syn_obj, df):
+        self.syn_obj = syn_obj
+        self.orig_df = df
+        self.df = df
+        self.V = set()
+        self.C = None
+        self.M = None
+        self.pred_scores = None
+        self.predictdf = None
 
-    def _fill_prediction_matrix(self, Ai, Aj, lu_num):
+        self._V_index = None
+        self._con = None
+        self._game_id = self.df['GAME_ID'].iloc[0]
+
+    def predict_all(self):
+        game_ids = self.orig_df['GAME_ID'].unique()
+        for game in game_ids:
+            self._game_id = game
+            self.df = self.orig_df[self.orig_df['GAME_ID'] == game]
+            self.predict_one()
+            self.append_prediction()
+
+    def predict_one(self):
+        for row in self.df.iterrows():
+            self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
+        self.V = list(self.V)
+
+        self._V_index = {}
+        for ix, player in enumerate(self.V):
+            self._V_index.update({player: ix})
+
+        index_of_big_C = [self.syn_obj._V_index[player] for player in self.V]
+
+        self.C = self.syn_obj.C[index_of_big_C]
+        self.M = np.zeros((len(self.df), len(self.V)))
+
+        for lu_num in xrange(len(self.df)):
+            h_lu = self.df['i_lineup'][lu_num]
+            a_lu = self.df['j_lineup'][lu_num]
+            self._fill_matrix(h_lu, a_lu, lu_num)
+
+        k = (1/sc.comb(10, 2))
+        self.M = k * self.M
+
+        self.pred_scores = np.dot(self.M, self.C)
+        self.predictdf = pd.DataFrame([[self._game_id, self.pred_scores.sum()]])
+
+    def score_prediction(self):
+        print self.orig_df['i_margin'].sum() * self.pred_scores.sum() > 0
+
+    def _fill_matrix(self, Ai, Aj, lu_num):
 
         combi = list(combinations(Ai, 2))
         combj = list(combinations(Aj, 2))
@@ -172,33 +222,38 @@ class ComputeSynergies():
             self.M[lu_num, p_idx1] += 1/float(d)
             self.M[lu_num, p_idx2] -= 1/float(d)
 
+    def short_path_len(self, node1, node2):
+        return len(nx.shortest_path(self.syn_obj.G, node1, node2)) - 1
 
 
-    def predict_game(self, row):
-        C = 
+def predict_all(syn_obj, df, season):
+    predict_df = pd.DataFrame()
+    game_ids = df['GAME_ID'].unique()
+    for game in game_ids:
+        print game
+        gamedf = df[df['GAME_ID'] == game].reset_index()
+        ps = PredictSynergy(syn_obj, gamedf)
+        ps.predict_one()
+        predict_df = predict_df.append(ps.predictdf)
 
+    predict_df.columns = ['GAME_ID', 'prediction']
+    predict_df.set_index('GAME_ID', inplace=True)
 
-class PredictSynergy():
+    actual = read_season('matchups_reordered', season)
+    actual = actual.groupby('GAME_ID').sum()['i_margin']
 
-    def __init__(self, syn_obj):
-        
+    com_df = pd.concat([actual, predict_df], axis=1)
+    com_df['correct'] = com_df['i_margin'] * com_df['prediction'] > 0
 
+    return com_df
 
-    def predict_season(self, predict_df):
-        players = set()
-        for row in predict_df.iterrows():
-            players |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
-
-        small_index = [self._V_index[x] for x in players]
-        new_C = self.C[small_index]
-        new_M = np.zeros((len(predict_df), len(players)))
-
-        for lu_num in xrange(len(predict_df)):
-            h_lu = self.df['i_lineup'][lu_num]
-            a_lu = self.df['j_lineup'][lu_num]
-            self._fill_prediction_matrix(h_lu, a_lu, lu_num)
 
 if __name__ == '__main__':
-    df = read_season('matchups_reordered', '2014')
+    season = '2014'
+    df = read_season('matchups_reordered', season)
     df = combine_same_matchups(df)
+    df = greater_than_minute(df)
     cs = ComputeSynergies(df)
+    cs.learn_capabilities()
+
+    predictions = predict_all(cs, df, season)
