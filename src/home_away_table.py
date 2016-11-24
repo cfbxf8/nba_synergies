@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from pymongo import MongoClient
 from connect_sql import connect_sql
+from helper_functions import read_all
 
 client = MongoClient()
 db = client.nba
@@ -47,6 +48,33 @@ def home_away_table(mongo_collection, psql_conn):
     df = pd.DataFrame([game_ids, home_ids, away_ids]).T
     df.columns = ['game_ids', 'home_ids', 'away_ids']
     df.to_csv('output.csv')
+
+    df.to_sql('home_away', conn, if_exists='replace', index=False)
+
+    return "Finished"
+
+
+def add_datetime():
+    conn = connect_sql()
+    old_df = read_all('home_away')
+    db_client = MongoClient()
+    db = db_client['nba']
+    table = db['raw']
+
+    jso = table.find()
+    game_id, date = [], []
+    for i in jso:
+        date.append(i['rowSet'][0][0][:10])
+        game_id.append(i['rowSet'][0][2])
+
+    game_id = pd.DataFrame(game_id, columns=['game_id'])
+    date = pd.DataFrame(date, columns=['date'])
+
+    df = pd.concat([game_id, date], axis=1)
+    df = df.rename(columns={"game_ids": "GAME_ID"})
+    df.drop('game_id', axis=1, inplace=True)
+
+    df = pd.concat([old_df, df], axis=1)
 
     df.to_sql('home_away', conn, if_exists='replace', index=False)
 

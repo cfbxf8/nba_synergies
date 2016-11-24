@@ -95,14 +95,17 @@ class PredictSynergy():
         return len(nx.shortest_path(self.syn_obj.G, node1, node2)) - 1
 
 
-def predict_all(syn_obj, df, season):
+def predict_all(self, syn_obj, df, season):
     predict_df = pd.DataFrame()
     game_ids = df['GAME_ID'].unique()
     for game in game_ids:
         print game
         gamedf = df[df['GAME_ID'] == game].reset_index()
         ps = PredictSynergy(syn_obj, gamedf)
-        ps.predict_one()
+        try:
+            ps.predict_one()
+        except KeyError:
+            continue
         predict_df = predict_df.append(ps.predictdf)
 
     predict_df.columns = ['GAME_ID', 'prediction']
@@ -113,6 +116,6 @@ def predict_all(syn_obj, df, season):
 
     com_df = pd.concat([actual, predict_df], axis=1)
     com_df['correct'] = com_df['i_margin'] * com_df['prediction'] > 0
-    # com_df = com_df[com_df['prediction'].notnull()]
+    com_df = com_df[com_df['prediction'].notnull()]
 
     return com_df
