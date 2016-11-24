@@ -111,6 +111,12 @@ def subset_division(df, division):
     return df
 
 
+def before_date_df(df, last_day):
+    df['date'] = pd.to_datetime(df.date, format="%Y-%m-%d")
+    df = df[df['date'] <= last_day]
+    return df
+
+
 def read_pickle(file_name):
     with open(file_name, 'rb') as f:
         d = pickle.load(f)

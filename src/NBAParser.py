@@ -260,8 +260,8 @@ class Game():
         elif self._is_home_correct is False:
             self.matchups = pd.DataFrame({"home_lineup": away_lineup,
                                           "away_lineup": home_lineup,
-                                          "home_margin": home_margin,
-                                          "away_margin": away_margin,
+                                          "home_margin": away_margin,
+                                          "away_margin": home_margin,
                                           "home_time": away_time,
                                           "away_time": home_time})
 

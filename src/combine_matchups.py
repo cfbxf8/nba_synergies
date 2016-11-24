@@ -29,7 +29,7 @@ def create_reordered_matchups():
 
     new_df['starting'] = np.where(new_df.duplicated('GAME_ID', keep='first'), 0, 1)
 
-    new_df.to_sql('matchups_reordered', con, if_exists='replace', index=True)
+    new_df.to_sql('matchups_reordered', con, if_exists='replace', index=False)
 
     return "Finished"
 
@@ -73,6 +73,7 @@ def add_divisions():
     team_divisions = pd.read_csv('../data/Divisions.csv')
     team_divisions.to_sql('teams_lookup', con,
                           if_exists='replace', index=False)
+
     return "Finished"
 
 

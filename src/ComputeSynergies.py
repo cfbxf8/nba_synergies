@@ -7,8 +7,9 @@ import random
 import time
 import cPickle as pickle
 import math
+from datetime import datetime, timedelta
 from combine_matchups import combine_same_matchups, greater_than_minute
-from helper_functions import read_season, timeit, connect_sql, subset_division
+from helper_functions import read_season, timeit, connect_sql, subset_division, read_all, before_date_df
 from PredictSynergy import PredictSynergy, predict_all
 
 
@@ -27,8 +28,6 @@ class ComputeSynergies():
         self._V_index = None
         self._con = None
         self.C_df = None
-        self._small_E = None
-        self._no_edge_list = None
         self._edge_prob = 0.5
 
         # self.create_graph()
@@ -49,12 +48,11 @@ class ComputeSynergies():
         num_E_super = len(E_super)
         num_E_small = np.random.binomial(num_E_super, self._edge_prob)
         mask_E = np.random.choice(num_E_super, num_E_small, replace=False)
-        self._small_E = np.array(E_super)[mask_E]
-        self._no_edge_list = np.array(E_super)[~mask_E]
+        small_E = np.array(E_super)[mask_E]
 
         self.G = nx.Graph()
         self.G.add_nodes_from(self.V)
-        self.G.add_edges_from(self._small_E)
+        self.G.add_edges_from(small_E)
 
     @timeit
     def learn_capabilities(self):
@@ -191,9 +189,12 @@ class ComputeSynergies():
             print e
             return "Finished with errors"
 
-    def to_pickle(self):
-        round_err = str(self.error.round()[0])
-        name = '../data/cs/synergy_class_Pacific_'+ round_err +'.pkl'
+    def to_pickle(self, folder=None, name=None):
+        if name is None:
+            name = ''
+        if folder is None:
+            folder = 'random/'
+        name = '../data/cs/' + folder + '/'+ name + '.pkl'
         with open(name, 'w') as f:
             pickle.dump(self, f)
 
@@ -229,12 +230,23 @@ class ComputeSynergies():
 if __name__ == '__main__':
     season = '2014'
     df = read_season('matchups_reordered', season)
-    df = subset_division(df, 'Pacific')
-    df = combine_same_matchups(df)
-    df = greater_than_minute(df)
-    cs = ComputeSynergies(df)
-    cs.create_many_random_graphs(100)
-    # cs.learn_capabilities()
-    # cs.simulated_annealing(1000)
 
-    # predictions = predict_all(cs, df, season)
+    # df = subset_division(df, 'Pacific')
+    last_graph_day = '2015-02-26'
+    last_graph_day = datetime.strptime(last_graph_day, "%Y-%m-%d")
+    train_df = before_date_df(df, date=last_graph_day)
+    train_df = combine_same_matchups(train_df)
+    train_df = greater_than_minute(train_df)
+    cs = ComputeSynergies(train_df)
+    cs.create_many_random_graphs(10)
+    # cs.learn_capabilities()
+    cs.simulated_annealing(10)
+
+    num_test_days = 7
+    last_test_day = last_graph_day + timedelta(days=num_test_days)
+
+    test_df = df[(df['date'] > last_graph_day) & (df['date'] <= last_test_day)]
+    test_df = combine_same_matchups(test_df)
+    test_df = greater_than_minute(test_df)
+
+    predictions = predict_all(cs, test_df, season)

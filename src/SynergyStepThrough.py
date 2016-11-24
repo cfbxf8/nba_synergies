@@ -231,6 +231,7 @@ class SynergyStepThrough():
 
 
 if __name__ == '__main__':
-    one = read_one('matchups_reordered', 'GAME_ID', '0021401224')
+    # one = read_one('matchups_reordered', 'GAME_ID', '0020801224')
+    one = read_one('matchups_reordered', 'GAME_ID', '0020800004')
     syn = SynergyStepThrough(one)
     syn.step_through_one_game()
