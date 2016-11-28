@@ -10,51 +10,143 @@ import math
 from datetime import datetime, timedelta
 from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql, subset_division, read_all, before_date_df, add_date, read_one
-from PredictSynergy import PredictSynergy, predict_all
+from PredictSynergyWeighted import PredictSynergyWeighted, predict_all
+# from pathos.multiprocessing import ProcessingPool as Pool
+import multiprocessing
 
 
-class ComputeSynergies():
+@timeit
+def genetic_algorithm(df, queue, pop_size=10, cross_over_prob=.9):
+    population = []
+    for i in xrange(pop_size):
+        ws = ComputeWeightedSynergies(df, queue=queue, idx=i)
+        population.append(ws)
+        ws.start()
+    for p in population:
+        p.join()
+    # population.sort(key=lambda x: x[0])
+    # best_score = population[0][0]
 
-    def __init__(self, df, graph_location=None):
+    # while best_score > 3:
+    #     keep = int(round((1-cross_over_prob) * pop_size))
+    #     new_population = population[:int(keep)]
+
+    #     while len(new_population) < pop_size:
+    #         p1 = self.roulette_selection(population)
+    #         p2 = p1
+    #         while p2 == p1:
+    #             p2 = self.roulette_selection(population)
+    #         children = self.crossover(p1[1], p2[1])
+
+    #         for child in children:
+    #             self.dist = child
+    #             self.learn_capabilities()
+    #             new_population.append((self.error, self.dist))
+    #         print len(new_population), self.error
+    #     new_population.sort(key=lambda x: x[0])
+    #     population = new_population
+    #     best_score = population[0][0]
+    #     print best_score
+    # self.to_pickle(name='genetic')
+    # self.dist = population[0][1]
+    # self.learn_capabilities()
+
+    return p
+
+def help_parallelize():
+    ws = ComputeWeightedSynergies(train_df)
+    return (ws.error, ws.dist)
+
+    @timeit
+    def initialize_population(self, pop_size):
+        # self.create_graph()
+        # self.learn_capabilities()
+        # print self.error
+        # population = (self.error, self.dist)
+        # return population
+
+        population = []
+        for _ in xrange(pop_size):
+            self.create_graph()
+            self.learn_capabilities()
+            print _, self.error
+            population.append((self.error, self.dist))
+        return population
+
+    def crossover(self, father, mother):
+        index1 = random.randint(1, father.shape[0] - 2)
+        index2 = random.randint(1, father.shape[0] - 2)
+        if index1 > index2:
+            index1, index2 = index2, index1
+        child1 = np.concatenate([father[:index1], mother[index1:index2],
+                                father[index2:]])
+        child2 = np.concatenate([mother[:index1], father[index1:index2],
+                                mother[index2:]])
+        child1 = self.make_symmetric(child1)
+        child2 = self.make_symmetric(child2)
+        return (child1, child2)
+
+    def roulette_selection(self, population):
+        fs = [i[0] for i in population]
+        sum_fs = sum(fs)
+        max_fs = max(fs)
+        min_fs = min(fs)
+        p = random.random() * sum_fs
+        t = max_fs + min_fs
+        chosen = population[0]
+        for i in population:
+            # if MAXIMIZATION:
+            #     p -= fitness(i)
+            # elif MINIMIZATION:
+            p -= (t - i[0])
+            if p < 0:
+                chosen = i
+                break
+        return chosen
+
+
+
+class ComputeWeightedSynergies(multiprocessing.Process):
+
+    def __init__(self, df, queue, idx, graph_location=None):
+        super(ComputeWeightedSynergies, self).__init__()
         self.df = df
-        self.V = set()
+        self.V = None
         self.C = None
         self.M = None
         self.B = None
         self.G = None
         self.error = None
         self.graph_location = graph_location
+        self.dist = None
+
+        self.queue = queue
+        self.idx = idx
 
         self._V_index = None
         self._con = None
         self.C_df = None
         self._edge_prob = 0.5
+        
+        self.create_graph()
 
-        # self.create_graph()
         # self._get_V_and_index()
         # self.df.reset_index(drop=True, inplace=True)
 
-    @timeit
     def create_graph(self):
-        self.V = set()
-        for row in self.df.iterrows():
-            self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
+        if self.V is None:
+            self.create_V()
 
-        print "Starting Create Graph"
-        num_verts = len(self.V)
-        print num_verts
+        size_V = len(self.V)
+        # create random matrix
+        rand_dist = np.random.randint(low=1, high=11, size=(size_V, size_V))
+        # make symmetrical
+        self.dist = self.make_symmetric(rand_dist)
+        # inverse for compatability function 1/d
+        self.dist = (1 / self.dist.astype(float))
+        # fill diagonals as zeros, these don't matter
+        np.fill_diagonal(self.dist, 0)
 
-        E_super = list(combinations(self.V, 2))
-        num_E_super = len(E_super)
-        num_E_small = np.random.binomial(num_E_super, self._edge_prob)
-        mask_E = np.random.choice(num_E_super, num_E_small, replace=False)
-        small_E = np.array(E_super)[mask_E]
-
-        self.G = nx.Graph()
-        self.G.add_nodes_from(self.V)
-        self.G.add_edges_from(small_E)
-
-    @timeit
     def learn_capabilities(self):
 
         self._create_matrices()
@@ -70,9 +162,14 @@ class ComputeSynergies():
 
         self.compute_error()
 
-    def _get_V_and_index(self):
+    def create_V(self):
+        self.V = set()
+        for row in self.df.iterrows():
+            self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
+        self._get_V_and_index()
+        self.V = list(self.V)
 
-        self.V = self.G.node.keys()
+    def _get_V_and_index(self):
         self._V_index = {}
         for ix, player in enumerate(self.V):
             self._V_index.update({player: ix})
@@ -99,23 +196,23 @@ class ComputeSynergies():
         for pair_i in combi:
             p_idx1 = self._V_index[pair_i[0]]
             p_idx2 = self._V_index[pair_i[1]]
-            d = nx.shortest_path_length(self.G, pair_i[0], pair_i[1])
-            self.M[lu_num, p_idx1] += 1/float(d)
-            self.M[lu_num, p_idx2] += 1/float(d)
+            # d = nx.shortest_path_length(self.G, pair_i[0], pair_i[1])
+            self.M[lu_num, p_idx1] += self.dist[p_idx1, p_idx2]
+            self.M[lu_num, p_idx2] += self.dist[p_idx1, p_idx2]
 
         for pair_j in combj:
             p_idx1 = self._V_index[pair_j[0]]
             p_idx2 = self._V_index[pair_j[1]]
-            d = nx.shortest_path_length(self.G, pair_j[0], pair_j[1])
-            self.M[lu_num, p_idx1] -= 1/float(d)
-            self.M[lu_num, p_idx2] -= 1/float(d)
+            # d = nx.shortest_path_length(self.G, pair_j[0], pair_j[1])
+            self.M[lu_num, p_idx1] -= self.dist[p_idx1, p_idx2]
+            self.M[lu_num, p_idx2] -= self.dist[p_idx1, p_idx2]
 
         for adver_pair in combadv:
             p_idx1 = self._V_index[adver_pair[0]]
             p_idx2 = self._V_index[adver_pair[1]]
-            d = nx.shortest_path_length(self.G, adver_pair[0], adver_pair[1])
-            self.M[lu_num, p_idx1] += 1/float(d)
-            self.M[lu_num, p_idx2] -= 1/float(d)
+            # d = nx.shortest_path_length(self.G, adver_pair[0], adver_pair[1])
+            self.M[lu_num, p_idx1] += self.dist[p_idx1, p_idx2]
+            self.M[lu_num, p_idx2] -= self.dist[p_idx1, p_idx2]
 
     # def short_path_len(self, node1, node2):
     #     return len(nx.shortest_path(self.G, node1, node2)) - 1
@@ -203,21 +300,20 @@ class ComputeSynergies():
     def create_many_random_graphs(self, num=10):
         incumbent_error = 10000
         for _ in xrange(num):
-            self._edge_prob = random.uniform(0.3, 0.9)
             self.create_graph()
-            self._get_V_and_index()
             self.df.reset_index(drop=True, inplace=True)
 
             self.learn_capabilities()
 
             print "New:", _, self._edge_prob, self.error
 
+            # import pdb; pdb.set_trace()
             if incumbent_error > self.error:
-                incumbent_graph = self.G
+                incumbent_graph = self.dist
                 incumbent_error = self.error
                 incumbent_edge_prob = self._edge_prob
             else:
-                self.G = incumbent_graph
+                self.dist = incumbent_graph
                 self.error = incumbent_error
                 self._edge_prob = incumbent_edge_prob
 
@@ -225,12 +321,19 @@ class ComputeSynergies():
 
         self.learn_capabilities()
 
+    def make_symmetric(self, child):
+        new_child = child.copy()
+        for col in xrange(new_child.shape[0] - 1):
+            for row in xrange(col + 1, new_child.shape[0]):
+                new_child[row, col] = child[col, row]
+        return new_child
+
+
 
 if __name__ == '__main__':
     season = '2015'
-    # df = read_season('matchups_reordered', season)
-    # df = add_date(df)
-    df = read_one('matchups_reordered', 'GAME_ID', '0021400008')
+    df = read_season('matchups_reordered', season)
+    # df = read_one('matchups_reordered', 'GAME_ID', '0021400008')
     train_df = add_date(df)
 
     # df = subset_division(df, 'Pacific')
@@ -238,12 +341,16 @@ if __name__ == '__main__':
     # last_graph_day = datetime.strptime(last_graph_day, "%Y-%m-%d")
 
     # train_df = before_date_df(df, last_day=last_graph_day)
-    train_df = combine_same_matchups(df)
+    train_df = combine_same_matchups(train_df)
     train_df = greater_than_minute(train_df)
-    cs = ComputeSynergies(train_df)
-    cs.create_many_random_graphs(10)
+    # cs = ComputeWeightedSynergies(train_df)
+    # cs.create_many_random_graphs(10)
     # cs.learn_capabilities()
-    # cs.simulated_annealing(1000)
+    # cs.simulated_annealing(10)
+    # multiprocesssing.Pool(7)
+    # pool.map(cs.genetic_algorithm()
+    q = multiprocessing.Queue()
+    population = genetic_algorithm(train_df, queue=q)
 
     # num_test_days = 7
     # last_test_day = last_graph_day + timedelta(days=num_test_days)
@@ -252,4 +359,4 @@ if __name__ == '__main__':
     # test_df = combine_same_matchups(test_df)
     # test_df = greater_than_minute(test_df)
 
-    predictions = predict_all(cs, train_df, season)
+    # predictions = predict_all(cs, test_df, season)

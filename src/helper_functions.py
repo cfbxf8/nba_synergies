@@ -117,11 +117,33 @@ def before_date_df(df, last_day):
     return df
 
 
+def add_date(df):
+    date_df = read_all('home_away')
+    df = df.merge(date_df[['GAME_ID', 'date']], on='GAME_ID')
+    return df
+
+
 def read_pickle(file_name):
     with open(file_name, 'rb') as f:
         d = pickle.load(f)
     return d
 
+
+def daily_correct_totals():
+    seasons = [str(i) for i in range(2008, 2016)]
+    large_df = pd.DataFrame()
+    for s in seasons:
+        file_path = '../data/predictions/10_23/pred_' + s + '.csv'
+        df = pd.read_csv(file_path)
+        df['season'] = s
+        large_df = pd.concat([large_df, df])
+
+    mean_ = large_df.groupby('graph_day').mean()
+    count_ = large_df.groupby('graph_day').count()['GAME_ID']
+    count_.name = 'count'
+    new_df = pd.concat([mean_, pd.DataFrame(count_)], axis=1)
+
+    return new_df
 
 def timeit(method):
 

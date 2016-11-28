@@ -65,6 +65,7 @@ def combine_same_matchups(df):
 
 def greater_than_minute(df):
     small_df = df[df['j_time'] >= 60]
+    small_df.reset_index(drop=True, inplace=True)
     return small_df
 
 

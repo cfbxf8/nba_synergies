@@ -7,7 +7,7 @@ from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql, subset_division
 
 
-class PredictSynergy():
+class PredictSynergyWeighted():
 
     def __init__(self, syn_obj, df):
         self.syn_obj = syn_obj
@@ -78,26 +78,26 @@ class PredictSynergy():
         for pair_i in combi:
             p_idx1 = self._V_index[pair_i[0]]
             p_idx2 = self._V_index[pair_i[1]]
-            d = nx.shortest_path_length(self.syn_obj.G, pair_i[0], pair_i[1])
-            self.M[lu_num, p_idx1] += 1/float(d)
-            self.M[lu_num, p_idx2] += 1/float(d)
+            # d = nx.shortest_path_length(self.G, pair_i[0], pair_i[1])
+            self.M[lu_num, p_idx1] += self.syn_obj.dist[p_idx1, p_idx2]
+            self.M[lu_num, p_idx2] += self.syn_obj.dist[p_idx1, p_idx2]
 
         for pair_j in combj:
             p_idx1 = self._V_index[pair_j[0]]
             p_idx2 = self._V_index[pair_j[1]]
-            d = nx.shortest_path_length(self.syn_obj.G, pair_j[0], pair_j[1])
-            self.M[lu_num, p_idx1] -= 1/float(d)
-            self.M[lu_num, p_idx2] -= 1/float(d)
+            # d = nx.shortest_path_length(self.G, pair_j[0], pair_j[1])
+            self.M[lu_num, p_idx1] -= self.syn_obj.dist[p_idx1, p_idx2]
+            self.M[lu_num, p_idx2] -= self.syn_obj.dist[p_idx1, p_idx2]
 
         for adver_pair in combadv:
             p_idx1 = self._V_index[adver_pair[0]]
             p_idx2 = self._V_index[adver_pair[1]]
-            d = nx.shortest_path_length(self.syn_obj.G, adver_pair[0], adver_pair[1])
-            self.M[lu_num, p_idx1] += 1/float(d)
-            self.M[lu_num, p_idx2] -= 1/float(d)
+            # d = nx.shortest_path_length(self.G, adver_pair[0], adver_pair[1])
+            self.M[lu_num, p_idx1] += self.syn_obj.dist[p_idx1, p_idx2]
+            self.M[lu_num, p_idx2] -= self.syn_obj.dist[p_idx1, p_idx2]
 
-    def short_path_len(self, node1, node2):
-        return len(nx.shortest_path(self.syn_obj.G, node1, node2)) - 1
+    # def short_path_len(self, node1, node2):
+    #     return len(nx.shortest_path(self.syn_obj.G, node1, node2)) - 1
 
 
 def predict_all(syn_obj, df, season):
@@ -106,7 +106,7 @@ def predict_all(syn_obj, df, season):
     for game in game_ids:
         print game
         gamedf = df[df['GAME_ID'] == game].reset_index()
-        ps = PredictSynergy(syn_obj, gamedf)
+        ps = PredictSynergyWeighted(syn_obj, gamedf)
         try:
             ps.predict_one()
         except KeyError:

@@ -1,9 +1,10 @@
 import pandas as pd
 from datetime import datetime, timedelta
-from helper_functions import read_all, read_season, before_date_df
+from helper_functions import read_all, read_season, before_date_df, add_date
 from combine_matchups import greater_than_minute, combine_same_matchups
-from ComputeSynergies import ComputeSynergies
-from PredictSynergy import PredictSynergy
+# from ComputeSynergies import ComputeSynergies
+from ComputeWeightedSynergies import ComputeWeightedSynergies
+from PredictSynergyWeighted import PredictSynergyWeighted
 
 
 class WeeklySynergies():
@@ -31,27 +32,33 @@ class WeeklySynergies():
         self.predict_df = pd.DataFrame()
         df = read_season('matchups_reordered', season)
         df.sort_values('index', inplace=True)
-        df = self.add_date(df)
+        df = add_date(df)
+        # df = self.add_date(df)
         self._last_graph_day = df.date.min()
         self._last_graph_day = datetime.strptime(self._last_graph_day, "%Y-%m-%d")
         last_day_of_season = df.date.max()
         last_day_of_season = datetime.strptime(last_day_of_season, "%Y-%m-%d")
         last_test_day = datetime(1, 1, 1)
 
-        while last_test_day < datetime(2008, 11, 17):
-            self._last_graph_day += timedelta(days=self.num_test_days)
-            train_df = self.get_train_df(df)
-            last_test_day = self._last_graph_day + timedelta(days=self.num_test_days)
+        while last_test_day < last_day_of_season:
+            try:
+                self._last_graph_day += timedelta(days=self.num_test_days)
+                train_df = self.get_train_df(df)
+                last_test_day = self._last_graph_day + timedelta(days=self.num_test_days)
 
-            cs = self.fit_graph(train_df)
+                cs = self.fit_graph(train_df)
 
-            temp_predict_df = self.predict(cs, df, last_test_day)
+                temp_predict_df = self.predict(cs, df, last_test_day)
 
-            self.predict_df = pd.concat([self.predict_df, temp_predict_df])
+                self.predict_df = pd.concat([self.predict_df, temp_predict_df])
+            except:
+                self.folder = 'interrupt'
+                continue
 
         self.predict_df = self._actual_scores.merge(self.predict_df, left_index=True, right_index=True)
         self.predict_df = self.predict_df[self.predict_df['prediction'].notnull()]
-        self.predict_df['correct'] = self.predict_df['i_margin'] * self.predict_df['prediction'] > 0
+        self.predict_df['match_correct'] = self.predict_df['i_margin'] * self.predict_df['prediction'] > 0
+        self.predict_df['start_correct'] = self.predict_df['i_margin'] * self.predict_df['start_pred'] > 0
 
         self._to_csv(season)
 
@@ -62,13 +69,13 @@ class WeeklySynergies():
         return train_df
 
     def fit_graph(self, train_df):
-        cs = ComputeSynergies(train_df)
-        cs.create_many_random_graphs(2)
+        ws = ComputeWeightedSynergies(train_df)
+        ws.genetic_algorithm()
         # cs.simulated_annealing(10)
         file_name = str(self._last_graph_day)[:10]
-        cs.to_pickle(folder=self.folder, name=file_name)
-        self.get_capabilities(cs)
-        return cs
+        ws.to_pickle(folder=self.folder, name=file_name)
+        self.get_capabilities(ws)
+        return ws
 
     def predict(self, cs, df, last_test_day):
         test_df = df[(df['date'] > self._last_graph_day) & (df['date'] <= last_test_day)]
@@ -80,19 +87,34 @@ class WeeklySynergies():
 
     def predict_over_dates(self, syn_obj, df):
         predict_df = pd.DataFrame()
+        start_df = pd.DataFrame()
         game_ids = df['GAME_ID'].unique()
         for game in game_ids:
             print game
             gamedf = df[df['GAME_ID'] == game].reset_index()
-            ps = PredictSynergy(syn_obj, gamedf)
+            startdf = gamedf[gamedf.starting >= 1].reset_index()
+            ps = PredictSynergyWeighted(syn_obj, gamedf)
+            if len(startdf) > 0:
+                ps_start = PredictSynergyWeighted(syn_obj, startdf)
+                try:
+                    ps_start.predict_one()
+                except KeyError:
+                    continue
             try:
                 ps.predict_one()
             except KeyError:
                 continue
             predict_df = predict_df.append(ps.predictdf)
+            start_df = start_df.append(ps_start.predictdf)
 
         predict_df.columns = ['GAME_ID', 'prediction']
         predict_df.set_index('GAME_ID', inplace=True)
+
+        start_df.columns = ['GAME_ID', 'start_pred']
+        start_df.set_index('GAME_ID', inplace=True)
+
+        predict_df = predict_df.merge(start_df, left_index=True,
+                                      right_index=True)
 
         predict_df['graph_day'] = str(self._last_graph_day)[:10]
         predict_df['error'] = syn_obj.error
@@ -113,7 +135,7 @@ class WeeklySynergies():
 
     def add_date(self, df):
         date_df = read_all('home_away')
-        df = df.merge(date_df, on='GAME_ID')
+        df = df.merge(date_df['GAME_ID', 'date'], on='GAME_ID')
         return df
 
     def _get_actual_scores(self):
@@ -134,5 +156,7 @@ class WeeklySynergies():
 
 
 if __name__ == '__main__':
-    ws = WeeklySynergies(7, folder='10_23')
-    ws.run_one_season('2008')
+    ws = WeeklySynergies(7, folder='weighted')
+    # ws.run_all_seasons()
+    season = raw_input("What Season?")
+    ws.run_one_season(season)
