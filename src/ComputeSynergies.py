@@ -10,7 +10,7 @@ import math
 from datetime import datetime, timedelta
 from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql, subset_division, read_all, before_date_df, add_date, read_one
-from PredictSynergy import PredictSynergy, predict_all
+# from PredictSynergy import PredictSynergy, predict_all
 
 
 class ComputeSynergies():
@@ -54,7 +54,6 @@ class ComputeSynergies():
         self.G.add_nodes_from(self.V)
         self.G.add_edges_from(small_E)
 
-    @timeit
     def learn_capabilities(self):
 
         self._create_matrices()
@@ -227,10 +226,11 @@ class ComputeSynergies():
 
 
 if __name__ == '__main__':
-    season = '2015'
+    season = '2014'
+    df = read_all('matchups_reordered')
     # df = read_season('matchups_reordered', season)
     # df = add_date(df)
-    df = read_one('matchups_reordered', 'GAME_ID', '0021400008')
+    # df = read_one('matchups_reordered', 'GAME_ID', '0021400008')
     train_df = add_date(df)
 
     # df = subset_division(df, 'Pacific')

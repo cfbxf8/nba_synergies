@@ -4,7 +4,9 @@ import scipy.misc as sc
 import networkx as nx
 import pandas as pd
 from combine_matchups import combine_same_matchups, greater_than_minute
-from helper_functions import read_season, timeit, connect_sql, subset_division
+from helper_functions import read_season, timeit, connect_sql, subset_division, add_date
+from sklearn.cross_validation import train_test_split
+from ComputeWeightedSynergies import ComputeWeightedSynergies
 
 
 class PredictSynergyWeighted():
@@ -61,8 +63,13 @@ class PredictSynergyWeighted():
         self.pred_scores = np.dot(self.M, self.C)
         self.predictdf = pd.DataFrame([[self._game_id, self.pred_scores.sum()]])
 
+        self.score_each_entry()
+
     def score_prediction(self):
         print self.orig_df['i_margin'].sum() * self.pred_scores.sum() > 0
+
+    def score_each_entry(self):
+        self.by_entry = pd.DataFrame([self.df['i_margin'], self.pred_scores])
 
     def _fill_matrix(self, Ai, Aj, lu_num):
 
@@ -124,3 +131,45 @@ def predict_all(syn_obj, df, season):
     com_df = com_df[com_df['prediction'].notnull()]
 
     return com_df
+
+def predict_matchups(syn_obj, df, season):
+    predict_df = pd.DataFrame()
+    game_ids = df['GAME_ID'].unique()
+    for game in game_ids:
+        print game
+        gamedf = df[df['GAME_ID'] == game].reset_index()
+        ps = PredictSynergyWeighted(syn_obj, gamedf)
+        try:
+            ps.predict_one()
+        except KeyError:
+            continue
+        predict_df = predict_df.append(ps.by_entry)
+
+    # predict_df.columns = ['GAME_ID', 'prediction', 'starters']
+    # predict_df.set_index('GAME_ID', inplace=True)
+
+    # actual = read_all('matchups_reordered')
+    # # actual = read_season('matchups_reordered', season)
+    # actual = actual.groupby('GAME_ID').sum()['i_margin']
+
+    # com_df = pd.concat([actual, predict_df], axis=1)
+    # com_df['correct'] = com_df['i_margin'] * com_df['prediction'] > 0
+    # com_df = com_df[com_df['prediction'].notnull()]
+
+    return predict_df
+
+
+if __name__ == '__main__':
+    X = read_season('matchups_reordered', '2008')
+    X = add_date(X)
+    all_predictions = pd.DataFrame()
+    k_folds = 3
+    for _ in xrange(k_folds):
+        train_df, test_df = train_test_split(X, test_size=0.1)
+        train_df = combine_same_matchups(train_df)
+        train_df = greater_than_minute(train_df)
+        cs = ComputeWeightedSynergies(train_df)
+        cs.genetic_algorithm(100)   
+        predictions = predict_all(cs, test_df, '2008')
+        all_predictions = pd.concat([all_predictions, predictions])
+    all_predictions.to_csv('k_fold_weighted.csv')

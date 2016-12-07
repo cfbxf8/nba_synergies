@@ -2,6 +2,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from helper_functions import read_all, read_season, before_date_df, add_date
 from combine_matchups import greater_than_minute, combine_same_matchups
+import sys
 # from ComputeSynergies import ComputeSynergies
 from ComputeWeightedSynergies import ComputeWeightedSynergies
 from PredictSynergyWeighted import PredictSynergyWeighted
@@ -28,32 +29,29 @@ class WeeklySynergies():
             self.run_one_season(s)
             self.all_predictions = pd.concat([self.all_predictions, self.predict_df])
 
-    def run_one_season(self, season):
+    def run_one_season(self, season, last_day=None):
         self.predict_df = pd.DataFrame()
         df = read_season('matchups_reordered', season)
         df.sort_values('index', inplace=True)
         df = add_date(df)
         # df = self.add_date(df)
-        self._last_graph_day = df.date.min()
+        self._last_graph_day = last_day
         self._last_graph_day = datetime.strptime(self._last_graph_day, "%Y-%m-%d")
         last_day_of_season = df.date.max()
         last_day_of_season = datetime.strptime(last_day_of_season, "%Y-%m-%d")
         last_test_day = datetime(1, 1, 1)
 
         while last_test_day < last_day_of_season:
-            try:
-                self._last_graph_day += timedelta(days=self.num_test_days)
-                train_df = self.get_train_df(df)
-                last_test_day = self._last_graph_day + timedelta(days=self.num_test_days)
+            self._last_graph_day += timedelta(days=self.num_test_days)
+            print self._last_graph_day
+            train_df = self.get_train_df(df)
+            last_test_day = self._last_graph_day + timedelta(days=self.num_test_days)
 
-                cs = self.fit_graph(train_df)
+            cs = self.fit_graph(train_df)
 
-                temp_predict_df = self.predict(cs, df, last_test_day)
+            temp_predict_df = self.predict(cs, df, last_test_day)
 
-                self.predict_df = pd.concat([self.predict_df, temp_predict_df])
-            except:
-                self.folder = 'interrupt'
-                continue
+            self.predict_df = pd.concat([self.predict_df, temp_predict_df])
 
         self.predict_df = self._actual_scores.merge(self.predict_df, left_index=True, right_index=True)
         self.predict_df = self.predict_df[self.predict_df['prediction'].notnull()]
@@ -156,7 +154,8 @@ class WeeklySynergies():
 
 
 if __name__ == '__main__':
-    ws = WeeklySynergies(7, folder='weighted')
+    ws = WeeklySynergies(7, folder='most_recent')
     # ws.run_all_seasons()
-    season = raw_input("What Season?")
-    ws.run_one_season(season)
+    # season = raw_input("What Season?")
+    season = '2010'
+    ws.run_one_season(season, last_day ='2011-01-04')
