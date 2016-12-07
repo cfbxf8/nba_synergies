@@ -10,7 +10,7 @@ import math
 from datetime import datetime, timedelta
 from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql, subset_division, read_all, before_date_df, add_date, read_one
-from PredictSynergyWeighted import PredictSynergyWeighted, predict_all
+# from PredictSynergyWeighted import PredictSynergyWeighted, predict_all
 # from pathos.multiprocessing import ProcessingPool as Pool
 
 
@@ -51,6 +51,7 @@ class ComputeWeightedSynergies():
         # fill diagonals as zeros, these don't matter
         np.fill_diagonal(self.dist, 0)
 
+    @timeit
     def learn_capabilities(self):
 
         self._create_matrices()
@@ -196,13 +197,12 @@ class ComputeWeightedSynergies():
             name = ''
         if folder is None:
             folder = 'random/'
-        name = '../data/cs/' + folder + '/'+ name + '.pkl'
-        with open(name, 'w') as f:
-            pickle.dump(self, f)
+        name = '../data/cs/' + folder + '/'+ name
+        np.save(name, self.dist)
 
         return "Pickled"
 
-    def genetic_algorithm(self, pop_size=20, cross_over_prob=.9, count=5):
+    def genetic_algorithm(self, pop_size=100, cross_over_prob=.9, count=5):
         # population = Pool().map(self.initialize_population, xrange(pop_size))
         population = self.initialize_population(pop_size)
         population.sort(key=lambda x: x[0])
@@ -211,18 +211,20 @@ class ComputeWeightedSynergies():
 
         keep = int(round((1 - cross_over_prob) * pop_size))
 
+        total_count = 0
         count_no_change = 0
-        while count > count_no_change:
+        while (count > count_no_change) & (total_count < 150):
+            print count_no_change
 
             new_population = population[0:int(keep + 1)]
 
             errors = [i[0] for i in population]
-            while len(new_population) < pop_size:
-                p1_idx = self.roulette_selection(errors)
+            while len(new_population) < 20:
+                p1_idx = self.roulette_selection_min(errors)
                 p1 = population[p1_idx]
                 p2_idx = p1_idx
                 while p2_idx == p1_idx:
-                    p2_idx = self.roulette_selection(errors)
+                    p2_idx = self.roulette_selection_min(errors)
                     p2 = population[p2_idx]
                 children = self.crossover(p1[1], p2[1])
 
@@ -235,14 +237,19 @@ class ComputeWeightedSynergies():
             population = new_population
             if best_score == population[0][0]:
                 count_no_change += 1
+                total_count += 1
             else:
                 best_score = population[0][0]
                 count_no_change = 0
+                total_count += 1
             print best_score
+            print total_count
 
-        # self.to_pickle(name='genetic_half_2014')
+
         self.dist = population[0][1]
         self.learn_capabilities()
+        self.capability_matrix()
+        # self.to_pickle(name='all_season_weighted')
 
         return "Finished!"
 
@@ -276,8 +283,8 @@ class ComputeWeightedSynergies():
         child2 = self.make_symmetric(child2)
         return (child1, child2)
 
-    def roulette_selection(self, errors):
-
+    def roulette_selection_min(self, errors):
+        # import pdb; pdb.set_trace()
         sum_e = sum(errors)
         max_e = max(errors)
         min_e = min(errors)
@@ -301,15 +308,16 @@ class ComputeWeightedSynergies():
 
 if __name__ == '__main__':
     season = '2014'
+    # df = read_all('matchups_reordered')
     df = read_season('matchups_reordered', season)
     # df = read_one('matchups_reordered', 'GAME_ID', '0021400008')
     train_df = add_date(df)
 
     # df = subset_division(df, 'Pacific')
-    last_graph_day = '2015-02-26'
-    last_graph_day = datetime.strptime(last_graph_day, "%Y-%m-%d")
+    # last_graph_day = '2015-02-26'
+    # last_graph_day = datetime.strptime(last_graph_day, "%Y-%m-%d")
 
-    train_df = before_date_df(train_df, last_day=last_graph_day)
+    # train_df = before_date_df(train_df, last_day=last_graph_day)
     train_df = combine_same_matchups(train_df)
     train_df = greater_than_minute(train_df)
     cs = ComputeWeightedSynergies(train_df)
@@ -318,7 +326,7 @@ if __name__ == '__main__':
     # cs.simulated_annealing(10)
     # multiprocesssing.Pool(7)
     # pool.map(cs.genetic_algorithm()
-    cs.genetic_algorithm()
+    cs.genetic_algorithm(pop_size=10)
 
     # num_test_days = 7
     # last_test_day = last_graph_day + timedelta(days=num_test_days)
