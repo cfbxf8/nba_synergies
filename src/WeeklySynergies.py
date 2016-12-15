@@ -2,8 +2,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from helper_functions import read_all, read_season, before_date_df, add_date
 from combine_matchups import greater_than_minute, combine_same_matchups
-import sys
 # from ComputeSynergies import ComputeSynergies
+# from PredictSynergy import PredictSynergy
 from ComputeWeightedSynergies import ComputeWeightedSynergies
 from PredictSynergyWeighted import PredictSynergyWeighted
 
@@ -34,7 +34,6 @@ class WeeklySynergies():
         df = read_season('matchups_reordered', season)
         df.sort_values('index', inplace=True)
         df = add_date(df)
-        # df = self.add_date(df)
         self._last_graph_day = last_day
         self._last_graph_day = datetime.strptime(self._last_graph_day, "%Y-%m-%d")
         last_day_of_season = df.date.max()
@@ -131,11 +130,6 @@ class WeeklySynergies():
         col_name = str(self._last_graph_day)[:10]
         self.capability_df = self.capability_df.rename(columns={"C": col_name})
 
-    def add_date(self, df):
-        date_df = read_all('home_away')
-        df = df.merge(date_df['GAME_ID', 'date'], on='GAME_ID')
-        return df
-
     def _get_actual_scores(self):
         actual = read_all('matchups_reordered')
         actual = actual.groupby('GAME_ID').sum()['i_margin']
@@ -149,13 +143,10 @@ class WeeklySynergies():
         pred_path = '../data/predictions/' + self.folder + '/pred_' + season + '.csv'
         self.predict_df.to_csv(pred_path)
 
-    def _remove_before_storage(self):
-        ''' Remove variables that you don't want to store'''
-
 
 if __name__ == '__main__':
     ws = WeeklySynergies(7, folder='most_recent')
     # ws.run_all_seasons()
-    # season = raw_input("What Season?")
     season = '2010'
-    ws.run_one_season(season, last_day ='2011-01-04')
+    # season = raw_input("What Season?")
+    ws.run_one_season(season)

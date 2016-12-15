@@ -4,6 +4,9 @@ from helper_functions import connect_sql, read_all
 
 
 def create_reordered_matchups():
+    """Create reordered matchups table where i_id is > j_id.
+    This will allow us to combine matchups where the same players are in the 
+    game for use in calculating Synergy Graphs."""
     con = connect_sql()
     df = read_all('matchups')
 
@@ -34,18 +37,10 @@ def create_reordered_matchups():
     return "Finished"
 
 
-def create_aggregated_matchups(df):
-    game_ids = df['GAME_ID'].unique()
-    all_combined = pd.DataFrame()
-    for game in game_ids:
-        print game
-        game_df = df[df['GAME_ID'] == game]
-        one_combined = combine_same_matchups(game_df)
-        all_combined = pd.concat([all_combined, one_combined], axis=1)
-    return all_combined
-
-
 def combine_same_matchups(df):
+    """Combine the matchups with the same players in the game.
+    This will help in calculating Synergy Graphs by reducing 
+    multi-collinearity when solving for player capabilities."""
     sumdf = df.groupby(['i_lineup', 'j_lineup']).sum()
     sumdf = sumdf[['i_margin', 'i_time', 'j_margin', 'j_time', 'starting']]
 
@@ -64,21 +59,23 @@ def combine_same_matchups(df):
 
 
 def greater_than_minute(df):
+    """Subset DataFrame with matchup times of more than a minute."""
     small_df = df[df['j_time'] >= 60]
     small_df.reset_index(drop=True, inplace=True)
     return small_df
 
 
 def add_divisions():
+    """Add divisions to teams_lookup table in SQL."""
     con = connect_sql()
     team_divisions = pd.read_csv('../data/Divisions.csv')
     team_divisions.to_sql('teams_lookup', con,
                           if_exists='replace', index=False)
-
     return "Finished"
 
 
 def create_aggregated_db(conn):
+    """Add table to SQL that aggregates player stats for each season."""
     df = pd.read_sql(sql="SELECT * from matchups", con=conn)
     df_new = df[['amargin', 'atime', 'away_lu', 'hmargin',
                  'home_lu', 'htime', 'season']]

@@ -1,7 +1,6 @@
 import numpy as np
 from itertools import combinations
 import scipy.misc as sc
-import networkx as nx
 import pandas as pd
 import random
 import time
@@ -10,22 +9,95 @@ import math
 from datetime import datetime, timedelta
 from combine_matchups import combine_same_matchups, greater_than_minute
 from helper_functions import read_season, timeit, connect_sql, subset_division, read_all, before_date_df, add_date, read_one
-# from PredictSynergyWeighted import PredictSynergyWeighted, predict_all
-# from pathos.multiprocessing import ProcessingPool as Pool
 
 
 class ComputeWeightedSynergies():
 
-    def __init__(self, df, high=11, graph_location=None):
+    """Class to Compute Weighted Synergy Graph from a given dataset.
+
+    High-level walkthrough of Class:
+    1. Build Random weighted, fully-connected matrix representation of graph:
+        A. Gather list of matchup training data
+        B. Unique players now form columns
+        C. Generate the edge weights as randint(1,10) for every cell
+        D. Make sure graph is symmetrical
+    2. Learn Player Capabilities:
+        A. Find distance between each player in matchup from the matrix representation of graph
+        B. Add or subtract this distance to the index of player in the distance matrix
+        C. Do this for all games in training set
+        D. Normalize distance matrix number of combinations (1 / 45)
+        E. Using this system of equations do least squares solver to solve Capability Matrix (C)
+        F. Run Genetic Algorithm until acceptable RMSE or k iterations is reached
+    3. This learned Synergy Graph for predicting future matchups.
+
+    More information on how this is created can be found in reference #1 
+    (pages 22-23 specifically) and reference #3 (page 6 specifically).
+
+    Parameters
+    ----------
+    df : pandas DataFrame
+        DF of you want to use to build graph.
+        Should contain at least these fields:
+        -'i_lineup' & 'j_lineup' where each lineup row is tuple of player_ids.
+        -'i_margin' & 'j_margin' where each row is integer of point 
+        differentials for that respective matchup.
+
+    high : integer > 1
+        Highest number that the Weighted edges in the Synergy Graph can take.
+
+    Attributes
+    ----------
+    V : set, size (n)
+        Vertices of graph representing each unique player.
+
+    C : array, shape (n, 1)
+        Capability Matrix.
+        Calculated capabilities for each player.
+
+    M : array, shape (m, n)
+        Synergy Matrix.
+        Mostly sparse matrix, each row = matchup, each col = different player.
+        Created using 1/distance in G for each player combination in matchup.
+        More information on how this is created can be found on page 6 of
+        reference #3 and pages 22-23 of reference #1.
+
+    B : array, shape (m, 1)
+        Past Performance Matrix.
+        Point differential for each matchup in past.
+
+    dist : array, shape (n, n)
+        Matrix representation of Weighted Synergy Graph.
+        The benefit of this method over creating the actual graph is that this
+        table allows us to lookup the synergy of pairwise players, rather than
+        having to compute shortest distance in the graph constantly.
+        Once finished, can use this to build the actual representation of the graph.
+
+    error : float
+        Model error on training set. RMSE.
+
+    C_df : pandas DataFrame
+        Compatibility Matrix (C) with player names added.
+
+    References
+    ----------
+    1) Modeling and Learning Synergy for Team Formation with Heterogeneous
+    Agents, 2012 - Somchaya Liemhetcharat, Manuela Veloso
+
+    2) Weighted Synergy Graphs for Effective Team Formation with
+    Heterogeneous Ad Hoc Agents, 2013 - Somchaya Liemhetcharat, Manuela Veloso
+
+    3) Adversarial Synergy Graph Model for Predicting Game Outcomes in Human
+    Basketball, 2015 - Somchaya Liemhetcharat, Yicheng Luo
+    """
+
+    def __init__(self, df, high=10):
         self.df = df
         self.high = high
         self.V = None
         self.C = None
         self.M = None
         self.B = None
-        self.G = None
         self.error = None
-        self.graph_location = graph_location
         self.dist = None
 
         self._V_index = None
@@ -38,25 +110,32 @@ class ComputeWeightedSynergies():
         # self.df.reset_index(drop=True, inplace=True)
 
     def create_graph(self):
+        """Create Initial Weighted Synergy Graph.
+        Specifics can be seen in inline comments below.
+        """
         if self.V is None:
             self.create_V()
 
         size_V = len(self.V)
         # create random matrix
-        rand_dist = np.random.randint(low=1, high=self.high, size=(size_V, size_V))
+        rand_dist = np.random.randint(low=1, high=self.high+1, size=(size_V, size_V))
         # make symmetrical
         self.dist = self.make_symmetric(rand_dist)
         # inverse for compatability function 1/d
         self.dist = (1 / self.dist.astype(float))
-        # fill diagonals as zeros, these don't matter
+        # fill diagonals as zeros, as these don't have any use
         np.fill_diagonal(self.dist, 0)
 
-    @timeit
     def learn_capabilities(self):
-
+        """Learn Capabilities from Weighted Graph structure.
+        -Get performance matrix, B and create empty M matrix
+        -Fill in M & B by looping through each row of df and using G
+        -Normalize values of M with combinations for each row, k (1/45)
+        -Least Squares solution to system of equations for C. (B = M dot C)
+        -Compute Error
+        """
         self._create_matrices()
 
-        # import pdb; pdb.set_trace()
         for lu_num in xrange(len(self.B)):
             h_lu = self.df['i_lineup'][lu_num]
             a_lu = self.df['j_lineup'][lu_num]
@@ -69,6 +148,8 @@ class ComputeWeightedSynergies():
         self.compute_error()
 
     def create_V(self):
+        """Create V by only getting unique players as set.
+        Then convert to list."""
         self.V = set()
         for row in self.df.iterrows():
             self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
@@ -76,19 +157,24 @@ class ComputeWeightedSynergies():
         self.V = list(self.V)
 
     def _get_V_and_index(self):
+        """Get Index for our players in V.
+        We need this to know the index for each player in our M and C matrix."""
         self._V_index = {}
         for ix, player in enumerate(self.V):
             self._V_index.update({player: ix})
 
     def _create_matrices(self):
-        # create M matrix
-        # row index = each lineup in training set
-        # column index = each player in training set
+        """Create zero M matrix where:
+            row index = each lineup in training set
+            column index = each player in training set
+        Create B matrix from past performance (point differentials)
+        """
         self.M = np.zeros((len(self.df['i_margin']), len(self.V)))
         self.B = np.array(self.df['i_margin'])
         self.B = self.B.reshape(self.B.shape[0], 1)
 
     def _fill_matrix(self, Ai, Aj, lu_num):
+        """Fill the M matrix for a given matchup."""
 
         combi = list(combinations(Ai, 2))
         combj = list(combinations(Aj, 2))
@@ -99,36 +185,40 @@ class ComputeWeightedSynergies():
         for item in combj:
             combadv.remove(item)
 
+        # Loop through each combination of teammates in team i.
+        # Add their pairwise synergy to M for the index of the current matchup and each respective player.
         for pair_i in combi:
             p_idx1 = self._V_index[pair_i[0]]
             p_idx2 = self._V_index[pair_i[1]]
-            # d = nx.shortest_path_length(self.G, pair_i[0], pair_i[1])
             self.M[lu_num, p_idx1] += self.dist[p_idx1, p_idx2]
             self.M[lu_num, p_idx2] += self.dist[p_idx1, p_idx2]
 
+        # Loop through each combination of teammates in team j
+        # Subtract the pairwise synergy to M for the index of the current matchup and each respective player.
         for pair_j in combj:
             p_idx1 = self._V_index[pair_j[0]]
             p_idx2 = self._V_index[pair_j[1]]
-            # d = nx.shortest_path_length(self.G, pair_j[0], pair_j[1])
             self.M[lu_num, p_idx1] -= self.dist[p_idx1, p_idx2]
             self.M[lu_num, p_idx2] -= self.dist[p_idx1, p_idx2]
 
+        # Loop through each combination across team i and j.
+        # Add pairwise synergy for i players and subtract for j players.
         for adver_pair in combadv:
             p_idx1 = self._V_index[adver_pair[0]]
             p_idx2 = self._V_index[adver_pair[1]]
-            # d = nx.shortest_path_length(self.G, adver_pair[0], adver_pair[1])
             self.M[lu_num, p_idx1] += self.dist[p_idx1, p_idx2]
             self.M[lu_num, p_idx2] -= self.dist[p_idx1, p_idx2]
 
-    # def short_path_len(self, node1, node2):
-    #     return len(nx.shortest_path(self.G, node1, node2)) - 1
-
     def compute_error(self):
+        """Compute Training Error.
+        RMSE between predicted point diff and actual.
+        """
         pred = np.dot(self.M, self.C)
         self.error = math.sqrt(sum((pred - self.B) ** 2) / len(self.B))
         # print self.error
 
     def capability_matrix(self):
+        """Create Capability DF that add player names to C and sorts by values."""
         self._con = connect_sql()
         C_df = pd.DataFrame(self.V, columns=['id'])
         C_df = pd.concat([C_df, pd.DataFrame(self.C, columns=['C'])], axis=1)
@@ -143,66 +233,66 @@ class ComputeWeightedSynergies():
         # C_df.drop(['player_id', 'season'], axis=1, inplace=True)
         self.C_df = C_df.sort_values('C', ascending=False)
 
-    @timeit
-    def simulated_annealing(self, num=1000):
-        try:
-            num_no_improvement = 0
-            while (num_no_improvement < num) & (self.error > 1):
-                # print("--- %s seconds ---" % round(time.time() - start_time, 2))
-                # start_time = time.time()
-                print num_no_improvement, self.error
-                self.old_G = self.G
-                self.old_error = self.error
-
-                rand = random.random()
-                if rand > 0.5:
-                    v1 = np.random.choice(self.V)
-                    v2 = np.random.choice(self.V)
-
-                    while self.G.has_edge(v1, v2) or v1 == v2:
-                        v1 = np.random.choice(self.G.nodes())
-                        v2 = np.random.choice(self.G.nodes())
-
-                    self.G.add_edge(v1, v2)
-
-                else:
-                    v1 = np.random.choice(self.G.nodes())
-                    v2 = np.random.choice(self.G.nodes())
-
-                    while self.G.has_edge(v1, v2) is False or v1 == v2:
-                        v1 = np.random.choice(self.G.nodes())
-                        v2 = np.random.choice(self.G.nodes())
-
-                    self.G.remove_edge(v1, v2)
-
-                self.learn_capabilities()
-
-                if self.error > self.old_error:
-                    self.G = self.old_G
-                    self.error = self.old_error
-                    num_no_improvement += 1
-
-                else:
-                    num_no_improvement = 0
-
-            return "Finished"
-
-        except Exception, e:
-            self.to_pickle()
-            print e
-            return "Finished with errors"
-
     def to_pickle(self, folder=None, name=None):
+        """Save the distance matrix used for future use.
+
+        Parameters
+        ----------
+        folder : string, ex. "10_23"
+            directory name to store pkl.
+            If none will store in 'random' directory.
+        name : string, ex. "2015"
+            Name of numpy file.
+        """
         if name is None:
             name = ''
         if folder is None:
             folder = 'random/'
-        name = '../data/cs/' + folder + '/'+ name
+        name = '../data/cs/' + folder + '/' + name
         np.save(name, self.dist)
 
         return "Pickled"
 
     def genetic_algorithm(self, pop_size=100, cross_over_prob=.9, count=5):
+        """Run a Genetic Algorithm Optimization in order more quickly converge to near the Global Minimimum compuatation error based on the Synergy Graph, the Compatibility Matrix, and Past performance of teams.
+        Namely the equation B = M dot C, trying to minimimize B - pred(B)
+
+        High Level:
+        1) First generation population of chromosomes are created
+            - where chromosomes = distinct randomly generated dist matrices
+        2) Rank population on computed error (lowest to highest)
+        3) Keep top pop_size * cross_over_prob chromosomes for next generation
+            - These are exact copies (no crossover)
+        4) Generate rest of next generation until you reach pop_size:
+            A. Using Roulette Selection select 2 parents
+                - Roulette Selection = (higher rank, higher prob of selection)
+            B. Simulate breeding by crossing over chromosomes
+                - Pick random row in dist matrix
+                - One child has parent1 values before this point, and p2 after
+                - Other child has p2 values before this point, p1 values after
+            C. Make these matrices symmetrical
+        5) Continue until the best score in the generation does not change for count times
+
+        For a more in-depth explananation of the general algorithm:
+            - http://www.obitko.com/tutorials/genetic-algorithms/
+
+        Parameters
+        ----------
+        pop_size : int
+            how many chromosomes in one generation of population
+            where chromosome pop = # of dist matrices to choose from
+        cross_over_prob : float, 0 to 1
+            How often crossover will be performed
+            where 0 = children are exact copies of old population chromosomes
+        count : int
+            Stopping condition (ie. continue breeding new generations until..)
+            How many generations in a row where the best score is unchanged
+
+        TODO
+        ----------
+        Add Mutation probability.
+            - Should help if getting stuck in local minima
+        """
         # population = Pool().map(self.initialize_population, xrange(pop_size))
         population = self.initialize_population(pop_size)
         population.sort(key=lambda x: x[0])
@@ -219,7 +309,7 @@ class ComputeWeightedSynergies():
             new_population = population[0:int(keep + 1)]
 
             errors = [i[0] for i in population]
-            while len(new_population) < 20:
+            while len(new_population) < pop_size:
                 p1_idx = self.roulette_selection_min(errors)
                 p1 = population[p1_idx]
                 p2_idx = p1_idx
@@ -245,7 +335,6 @@ class ComputeWeightedSynergies():
             print best_score
             print total_count
 
-
         self.dist = population[0][1]
         self.learn_capabilities()
         self.capability_matrix()
@@ -255,12 +344,7 @@ class ComputeWeightedSynergies():
 
     @timeit
     def initialize_population(self, pop_size):
-        # self.create_graph()
-        # self.learn_capabilities()
-        # print self.error
-        # population = (self.error, self.dist)
-        # return population
-
+        """Create initial population with size pop_size."""
         population = []
         for _ in xrange(pop_size):
             self.create_graph()
@@ -270,7 +354,30 @@ class ComputeWeightedSynergies():
         return population
 
     def crossover(self, father, mother):
-        '''https://gist.github.com/bellbind/741853'''
+        """Create 2 new members of generation by combining 2 past chromosomes
+        Can be thought of as simulated breeding.
+        This method uses two point crossover with randomly generated points.
+
+        Parameters
+        ----------
+        father : array, shape (n, n)
+            dist matrix that will act as the father for the 2 children
+        mother : array, shape (n, n)
+            dist matrix that will act as the mother for the 2 children
+
+        Returns
+        ----------
+        child1 : array, shape (n, n)
+            new dist matrix for new generation
+            created by crossing over mother and father chromosomes
+        child2 : array, shape (n, n)
+            new dist matrix for new generation
+            created by crossing over mother and father chromosomes
+
+        References
+        ----------
+        https://gist.github.com/bellbind/741853
+        """
         index1 = random.randint(1, father.shape[0] - 2)
         index2 = random.randint(1, father.shape[0] - 2)
         if index1 > index2:
@@ -284,7 +391,27 @@ class ComputeWeightedSynergies():
         return (child1, child2)
 
     def roulette_selection_min(self, errors):
-        # import pdb; pdb.set_trace()
+        """Select a future parent from a given list of errors
+        Since this is a minimum optimization:
+            - lower errors = higher prob (ie bigger area on a roulette wheel)
+
+        For more information of the general algorithm in the max case:
+            - http://www.obitko.com/tutorials/genetic-algorithms/selection.php
+
+        Parameters
+        ----------
+        errors : list of floats
+            computed error for each member of past population
+
+        Returns
+        ----------
+        chosen_index : int, 0 to len(errors)
+            Index of past population to be chosen as future parent
+
+        References
+        ----------
+        http://stackoverflow.com/questions/8760473/roulette-wheel-selection-for-function-minimization
+        """
         sum_e = sum(errors)
         max_e = max(errors)
         min_e = min(errors)
@@ -299,6 +426,18 @@ class ComputeWeightedSynergies():
         return chosen_index
 
     def make_symmetric(self, child):
+        """Make a square matrix symmetric.
+
+        Parameters
+        ----------
+        child : array, shape (n, n)
+            child matrix that needs to be made symmetric
+
+        Returns
+        ----------
+        new_child : array, shape (n, n)
+            new symmetric using top right triangle of original matrix.
+        """
         new_child = child.copy()
         for col in xrange(new_child.shape[0] - 1):
             for row in xrange(col + 1, new_child.shape[0]):
@@ -307,32 +446,24 @@ class ComputeWeightedSynergies():
 
 
 if __name__ == '__main__':
+    '''Choose all, one season, or one game as df?'''
     season = '2014'
     # df = read_all('matchups_reordered')
     df = read_season('matchups_reordered', season)
     # df = read_one('matchups_reordered', 'GAME_ID', '0021400008')
     train_df = add_date(df)
 
+    '''Subset on division or before given day?'''
     # df = subset_division(df, 'Pacific')
     # last_graph_day = '2015-02-26'
     # last_graph_day = datetime.strptime(last_graph_day, "%Y-%m-%d")
-
     # train_df = before_date_df(train_df, last_day=last_graph_day)
+
+    '''Combine same matchups and remove matchups less than minute.'''
     train_df = combine_same_matchups(train_df)
     train_df = greater_than_minute(train_df)
+
+    '''Compute Synergy Graph and learn Capabilities'''
     cs = ComputeWeightedSynergies(train_df)
-    # cs.create_many_random_graphs(10)
-    # cs.learn_capabilities()
-    # cs.simulated_annealing(10)
-    # multiprocesssing.Pool(7)
-    # pool.map(cs.genetic_algorithm()
     cs.genetic_algorithm(pop_size=10)
-
-    # num_test_days = 7
-    # last_test_day = last_graph_day + timedelta(days=num_test_days)
-
-    # test_df = df[(df['date'] > last_graph_day) & (df['date'] <= last_test_day)]
-    # test_df = combine_same_matchups(test_df)
-    # test_df = greater_than_minute(test_df)
-
-    # predictions = predict_all(cs, test_df, season)
+    cs.learn_capabilities()
