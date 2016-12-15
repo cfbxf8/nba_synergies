@@ -6,8 +6,7 @@ import cPickle as pickle
 
 
 def connect_sql():
-    """Connect to SQL database using a config file and sqlalchemy
-    """
+    """Connect to local SQL database using a config file and sqlalchemy."""
 
     config = ConfigParser.ConfigParser()
     config.readfp(open('config.ini'))
@@ -46,6 +45,18 @@ def connect_sql():
 
 
 def read_all(table):
+    """Read and return full table from locally stored SQL DB.
+
+    Parameters
+    ----------
+    table : string, ex. 'matchups'
+        Table from local SQL DB to read in.
+
+    Returns
+    -------
+    df : pandas DataFrame
+        Full table from SQL.
+    """
     con = connect_sql()
     sql = 'SELECT * from ' + table + ';'
     df = pd.read_sql(sql=sql, con=con)
@@ -61,6 +72,21 @@ def read_all(table):
 
 
 def read_season(table, season):
+    """Read and return one season of table from locally stored SQL DB.
+    Can be used on any table with 'season' field.
+
+    Parameters
+    ----------
+    table : string, ex. 'matchups'
+        Table from local SQL DB to read in.
+    season : string, ex. '2015'
+        season to subset on.
+
+    Returns
+    -------
+    df : pandas DataFrame
+        Converted table from SQL.
+    """
     con = connect_sql()
     condition = table + ".season = cast(" + season + " as text)"
     sql = 'SELECT * from ' + table + ' where ' + condition + ";"
@@ -77,6 +103,23 @@ def read_season(table, season):
 
 
 def read_one(table, where_column, condition):
+    """Read and return table from locally stored SQL DB where field = _.
+    Can be used on any table.
+
+    Parameters
+    ----------
+    table : string, ex. 'matchups'
+        Table from local SQL DB to read in.
+    where_column : string, ex. 'GAME_ID'
+        column to use in where conditional.
+    condition : string, ex. '0021500001'
+        condition to use in where conditional.
+
+    Returns
+    -------
+    df : pandas DataFrame
+        Converted table from SQL.
+    """
     con = connect_sql()
 
     if type(condition) is str:
@@ -100,6 +143,7 @@ def read_one(table, where_column, condition):
 
 
 def subset_division(df, division):
+    """Subset DataFrame on a division."""
     team_ids = read_all('teams_lookup')[['id', 'division']]
     df = df.merge(team_ids, how='left', left_on='i_id', right_on='id')
     df = df.merge(team_ids, how='left', left_on='j_id', right_on='id', suffixes=['_i', '_j'])
@@ -112,41 +156,28 @@ def subset_division(df, division):
 
 
 def before_date_df(df, last_day):
+    """Subset DataFrame on only days before a given date (%Y-%m-%d")."""
     df['date'] = pd.to_datetime(df.date, format="%Y-%m-%d")
     df = df[df['date'] <= last_day]
     return df
 
 
 def add_date(df):
+    """Merge date to any DataFrame with 'GAME_ID' field."""
     date_df = read_all('home_away')
     df = df.merge(date_df[['GAME_ID', 'date']], on='GAME_ID')
     return df
 
 
 def read_pickle(file_name):
+    """Read pickle file based on file_name"""
     with open(file_name, 'rb') as f:
         d = pickle.load(f)
     return d
 
 
-def daily_correct_totals():
-    seasons = [str(i) for i in range(2008, 2016)]
-    large_df = pd.DataFrame()
-    for s in seasons:
-        file_path = '../data/predictions/10_23/pred_' + s + '.csv'
-        df = pd.read_csv(file_path)
-        df['season'] = s
-        large_df = pd.concat([large_df, df])
-
-    mean_ = large_df.groupby('graph_day').mean()
-    count_ = large_df.groupby('graph_day').count()['GAME_ID']
-    count_.name = 'count'
-    new_df = pd.concat([mean_, pd.DataFrame(count_)], axis=1)
-
-    return new_df
-
 def timeit(method):
-
+    """Time any function using @timeit decorator."""
     def timed(*args, **kw):
         ts = time.time()
         result = method(*args, **kw)

@@ -3,38 +3,76 @@ from itertools import combinations
 import scipy.misc as sc
 import networkx as nx
 import pandas as pd
-from combine_matchups import combine_same_matchups, greater_than_minute
-from helper_functions import read_season, timeit, connect_sql, subset_division, read_all, add_date
-from sklearn.cross_validation import train_test_split
-from ComputeSynergies import ComputeSynergies
 
 
 class PredictSynergy():
 
+    """Class to Predict matchup outcomes from Unweighted Synergy Graph
+
+    Parameters
+    ----------
+    syn_obj : ComputeSynergies obj
+        Already solved for Synergy Graph from ComputeSynergies Class
+
+    df : pandas DataFrame
+        DF of you want to use to predict outcomes.
+        Should contain at least these fields:
+        -'i_lineup' & 'j_lineup' where each lineup row is tuple of player_ids.
+        * If you also want to test performance then also need
+        -'i_margin' & 'j_margin' where each row is integer of point
+        differentials for that respective matchup.
+
+    Attributes
+    ----------
+    V : set, size (n)
+        Vertices of graph representing each unique player.
+
+    C : array, shape (n, 1)
+        Capability Matrix.
+        Calculated capabilities for each player.
+
+    M : array, shape (m, n)
+        Synergy Matrix.
+        Mostly sparse matrix, each row = matchup, each col = different player.
+        Created using 1/distance in G for each player combination in matchup.
+        More information on how this is created can be found on page 6 of
+        reference #3 and pages 22-23 of reference #1.
+
+    predictdf : pandas DataFrame
+        DataFrame with predictions for each game.
+        Predictions for both all of the matchups in the game and starters-only.
+
+    by_entry : pandas DataFrame
+        DataFrame with predictions at the more granular matchup-level.
+
+    References
+    ----------
+    1) Modeling and Learning Synergy for Team Formation with Heterogeneous
+    Agents, 2012 - Somchaya Liemhetcharat, Manuela Veloso
+
+    2) Weighted Synergy Graphs for Effective Team Formation with
+    Heterogeneous Ad Hoc Agents, 2013 - Somchaya Liemhetcharat, Manuela Veloso
+
+    3) Adversarial Synergy Graph Model for Predicting Game Outcomes in Human
+    Basketball, 2015 - Somchaya Liemhetcharat, Yicheng Luo
+    """
+
     def __init__(self, syn_obj, df):
         self.syn_obj = syn_obj
-        self.orig_df = df
         self.df = df
         self.V = set()
         self.C = None
         self.M = None
-        self.pred_scores = None
         self.predictdf = None
         self.by_entry = None
 
-        self._V_index = None
-        self._con = None
+        # self._pred_scores = None
+        # self._V_index = None
+        # self._con = None
         self._game_id = self.df['GAME_ID'].iloc[0]
 
-    # def predict_all(self):
-    #     game_ids = self.orig_df['GAME_ID'].unique()
-    #     for game in game_ids:
-    #         self._game_id = game
-    #         self.df = self.orig_df[self.orig_df['GAME_ID'] == game]
-    #         self.predict_one()
-    #         self.append_prediction()
-
     def predict_one(self):
+        """Predict one game of matchups given a Synergy Graph and player capabilities. """
         for row in self.df.iterrows():
             self.V |= set(row[1]['i_lineup']) | set(row[1]['j_lineup'])
         self.V = list(self.V)
@@ -61,18 +99,18 @@ class PredictSynergy():
         k = (1/sc.comb(10, 2))
         self.M = k * self.M
 
-        self.pred_scores = np.dot(self.M, self.C)
-        self.predictdf = pd.DataFrame([[self._game_id, self.pred_scores.sum(), self.pred_scores[0]]])
+        self._pred_scores = np.dot(self.M, self.C)
+        self.predictdf = pd.DataFrame([[self._game_id, self._pred_scores.sum(), self._pred_scores[0][0]]])
 
         self.score_each_entry()
 
-    def score_prediction(self):
-        print self.orig_df['i_margin'].sum() * self.pred_scores.sum() > 0
-
     def score_each_entry(self):
-        self.by_entry = pd.concat([self.df['i_margin'],  pd.Series(self.pred_scores.flatten())], axis=1)
+        """Get by_entry attribute which is the comparison of predictions to actuals for the most granular matchup case."""
+        self.by_entry = pd.DataFrame(self._pred_scores)
+        self.by_entry = self.by_entry.rename(columns={0: 'prediction_by_matchup'})
 
     def _fill_matrix(self, Ai, Aj, lu_num):
+        """Fill the M matrix for a given matchup."""
 
         combi = list(combinations(Ai, 2))
         combj = list(combinations(Aj, 2))
@@ -83,6 +121,8 @@ class PredictSynergy():
         for item in combj:
             combadv.remove(item)
 
+        # Loop through each combination of teammates in team i.
+        # Add their pairwise synergy to M for the index of the current matchup and each respective player.
         for pair_i in combi:
             p_idx1 = self._V_index[pair_i[0]]
             p_idx2 = self._V_index[pair_i[1]]
@@ -90,6 +130,8 @@ class PredictSynergy():
             self.M[lu_num, p_idx1] += 1/float(d)
             self.M[lu_num, p_idx2] += 1/float(d)
 
+        # Loop through each combination of teammates in team j
+        # Subtract the pairwise synergy to M for the index of the current matchup and each respective player.
         for pair_j in combj:
             p_idx1 = self._V_index[pair_j[0]]
             p_idx2 = self._V_index[pair_j[1]]
@@ -97,90 +139,11 @@ class PredictSynergy():
             self.M[lu_num, p_idx1] -= 1/float(d)
             self.M[lu_num, p_idx2] -= 1/float(d)
 
+        # Loop through each combination across team i and j.
+        # Add pairwise synergy for i players and subtract for j players.
         for adver_pair in combadv:
             p_idx1 = self._V_index[adver_pair[0]]
             p_idx2 = self._V_index[adver_pair[1]]
             d = nx.shortest_path_length(self.syn_obj.G, adver_pair[0], adver_pair[1])
             self.M[lu_num, p_idx1] += 1/float(d)
             self.M[lu_num, p_idx2] -= 1/float(d)
-
-    def short_path_len(self, node1, node2):
-        return len(nx.shortest_path(self.syn_obj.G, node1, node2)) - 1
-
-
-def predict_all(syn_obj, df, season):
-    predict_df = pd.DataFrame()
-    game_ids = df['GAME_ID'].unique()
-    for game in game_ids:
-        print game
-        gamedf = df[df['GAME_ID'] == game].reset_index()
-        ps = PredictSynergy(syn_obj, gamedf)
-        try:
-            ps.predict_one()
-        except KeyError:
-            continue
-        predict_df = predict_df.append(ps.predictdf)
-
-    predict_df.columns = ['GAME_ID', 'prediction', 'starters']
-    predict_df.set_index('GAME_ID', inplace=True)
-
-    actual = read_all('matchups_reordered')
-    # actual = read_season('matchups_reordered', season)
-    actual = actual.groupby('GAME_ID').sum()['i_margin']
-
-    com_df = pd.concat([actual, predict_df], axis=1)
-    com_df['correct'] = com_df['i_margin'] * com_df['prediction'] > 0
-    com_df = com_df[com_df['prediction'].notnull()]
-
-    return com_df
-
-def predict_matchups(syn_obj, df, season):
-    # try:
-    #     df.drop('level_0', axis=1, inplace=True)
-    # except:
-    #     valu
-    predict_df = pd.DataFrame()
-    game_ids = df['GAME_ID'].unique()
-    for game in game_ids:
-        print game
-        gamedf = df[df['GAME_ID'] == game].reset_index()
-        ps = PredictSynergy(syn_obj, gamedf)
-        try:
-            ps.predict_one()
-        except KeyError:
-            continue
-        predict_df = predict_df.append(ps.by_entry)
-
-    # predict_df.columns = ['GAME_ID', 'prediction', 'starters']
-    # predict_df.set_index('GAME_ID', inplace=True)
-
-    # actual = read_all('matchups_reordered')
-    # # actual = read_season('matchups_reordered', season)
-    # actual = actual.groupby('GAME_ID').sum()['i_margin']
-
-    # com_df = pd.concat([actual, predict_df], axis=1)
-    # com_df['correct'] = com_df['i_margin'] * com_df['prediction'] > 0
-    # com_df = com_df[com_df['prediction'].notnull()]
-
-    return predict_df
-
-
-if __name__ == '__main__':
-    X = read_season('matchups_reordered', '2008')
-    X = add_date(X)
-    all_predictions = pd.DataFrame()
-    k_folds = 3
-    for _ in xrange(k_folds):
-        train_df, test_df = train_test_split(X, test_size=0.1)
-        train_df = combine_same_matchups(train_df)
-        train_df = greater_than_minute(train_df)
-        cs = ComputeSynergies(train_df)
-        cs.create_many_random_graphs(10)
-        # cs.simulated_annealing(400)
-        test_df = combine_same_matchups(test_df)
-        test_df = test_df.reset_index(drop=True)
-        ps = PredictSynergy(cs, test_df)
-        ps.predict_one()
-        # predictions = predict_matchups(cs, test_df, '2008')
-        # all_predictions = pd.concat([all_predictions, predictions])
-    all_predictions.to_csv('k_fold_unweighted.csv')
