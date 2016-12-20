@@ -9,17 +9,16 @@ from PredictSynergyWeighted import PredictSynergyWeighted
 
 
 def predict_all(syn_obj, df, season):
-    """Predict each matchup 
+    """Predict each matchup using Synergy Graphs.
 
     Parameters
     ----------
-    season : string ex. '2014'.
-        Seasons to be looped through. 'ALL' = 2008-2015
-    data_path : string
-        Path to locally stored data.
-    update_tables : list of strings
-        SQL Tables to update.
-        'ALL' = players, teams, matchups, team_stats, starter_stats, player_stats
+    syn_obj : Computed Synergy Graph Object
+        Can be Weighted or Unweighted.
+    df : Pandas DataFrame
+        df you want to predict.
+    season : string, ex. '2008'
+        season you are predicting on
     """
     predict_df = pd.DataFrame()
     for i in xrange(len(df)):

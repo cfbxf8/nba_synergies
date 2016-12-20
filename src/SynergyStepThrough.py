@@ -321,6 +321,8 @@ class SynergyStepThrough():
         self.C_df = C_df
 
     def update_capability_matrix(self):
+        """Update Capability Matrix for every matchup after the starters.
+        Adds in substitution column 'change' where subs going in = True and subs going out = False."""
         self.C_df['C'] = self.C.round(1)
         self.C_df['M'] = pd.Series(self.M[-1], name='M').round(2)
         # self.C_df['team_M'] = pd.Series(self._team_M[-1], name='team_M').round(2)
@@ -351,6 +353,7 @@ class SynergyStepThrough():
         # self.C_df['diff'] = np.where(self.C_df['id'].isin(i_lineup), cur_ptd, 0)
 
     def player_team_id_lookup(self):
+        """Get Team IDs for each player."""
         game_id = str(self._bigdf.iloc[0]['GAME_ID'])
         self._teamids = read_one('player_stats', 'GAME_ID', game_id)
 
