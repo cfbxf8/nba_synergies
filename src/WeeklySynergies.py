@@ -8,6 +8,7 @@ from ComputeWeightedSynergies import ComputeWeightedSynergies
 from PredictSynergyWeighted import PredictSynergyWeighted
 
 
+
 class WeeklyPredictions():
 
     """Class to Predict full game outcomes using Synergy Graphs.
@@ -41,6 +42,7 @@ class WeeklyPredictions():
         self.folder = folder
 
         self.all_predictions = pd.DataFrame()
+
         self.capability_df = None
 
         self._season_df = None
@@ -55,6 +57,7 @@ class WeeklyPredictions():
         for s in seasons:
             self.capability_df = pd.DataFrame()
             self.run_one_season(s)
+
             self.all_predictions = pd.concat([self.all_predictions, self._season_df])
 
     def run_one_season(self, season, last_day=None):
@@ -178,7 +181,7 @@ class WeeklyPredictions():
         self.capability_df.to_csv(c_path)
 
         pred_path = '../data/predictions/' + self.folder + '/pred_' + season + '.csv'
-        self._season_df.to_csv(pred_path)
+        self._season_df.to_csv(pred_path) 
 
 
 if __name__ == '__main__':
