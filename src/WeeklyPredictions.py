@@ -8,7 +8,6 @@ from ComputeWeightedSynergies import ComputeWeightedSynergies
 from PredictSynergyWeighted import PredictSynergyWeighted
 
 
-
 class WeeklyPredictions():
 
     """Class to Predict full game outcomes using Synergy Graphs.
