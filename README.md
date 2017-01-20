@@ -13,8 +13,9 @@ This new method, originally suggested by [Carnegie Mellon robotics researchers](
 ![alt text](https://github.com/cfbxf8/nba_synergies/blob/master/imgs/Presentation.005.jpeg)
 ![alt text](https://github.com/cfbxf8/nba_synergies/blob/master/imgs/Presentation.006.jpeg)
 ![alt text](https://github.com/cfbxf8/nba_synergies/blob/master/imgs/Presentation.007.jpeg)
-`Because this is a new and relatively unknown methodology, to fit them model I had to build the unweighted and weighted Synergy Graphs Classes from scratch including the Simulated Annealing and Genetic Algorithm minimization functions.
-Representing this connected weighted graph distance as a matrix, 30x improvement in computation time for convergence.`
+```Because this is a new and relatively unknown methodology, to fit them model I had to build the unweighted and weighted Synergy Graphs Classes from scratch including the Simulated Annealing and Genetic Algorithm minimization functions.
+Representing this connected weighted graph distance as a matrix, 30x improvement in computation time for convergence.
+```
 ![alt text](https://github.com/cfbxf8/nba_synergies/blob/master/imgs/Presentation.008.jpeg)
 ![alt text](https://github.com/cfbxf8/nba_synergies/blob/master/imgs/Presentation.009.jpeg)
 ![alt text](https://github.com/cfbxf8/nba_synergies/blob/master/imgs/Presentation.010.jpeg)
