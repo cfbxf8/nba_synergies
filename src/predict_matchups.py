@@ -8,7 +8,7 @@ from PredictSynergy import PredictSynergy
 from PredictSynergyWeighted import PredictSynergyWeighted
 
 
-def predict_all(syn_obj, df, season):
+def predict_all_matchups(syn_obj, df, season):
     """Predict each matchup using Synergy Graphs.
 
     Parameters
