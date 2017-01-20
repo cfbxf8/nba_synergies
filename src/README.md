@@ -1,3 +1,5 @@
+# File Guide (further documentation within)
+
 __Data ETL__ <br>
 |── NBAParser.py = *Load, parse, store raw NBA json game files* <br>
 __Train (Compute Graph)__ <br>
